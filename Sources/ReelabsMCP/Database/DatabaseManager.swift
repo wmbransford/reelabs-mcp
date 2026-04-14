@@ -145,5 +145,37 @@ final class DatabaseManager: Sendable {
 
         // v2_add_compactJson removed — column already exists in v1 schema
         migrator.registerMigration("v2_add_compactJson") { _ in }
+
+        migrator.registerMigration("v3_visual_analysis") { db in
+            try db.create(table: "visual_analyses") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("assetId", .integer)
+                    .references("assets", onDelete: .setNull)
+                t.column("sourcePath", .text).notNull()
+                t.column("status", .text).notNull().defaults(to: "extracted")
+                t.column("sampleFps", .double).notNull()
+                t.column("frameCount", .integer).notNull().defaults(to: 0)
+                t.column("sceneCount", .integer).notNull().defaults(to: 0)
+                t.column("durationSeconds", .double).notNull().defaults(to: 0)
+                t.column("framesDir", .text).notNull().defaults(to: "")
+                t.column("createdAt", .text).notNull().defaults(sql: "(datetime('now'))")
+            }
+
+            try db.create(table: "visual_scenes") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("analysisId", .integer).notNull()
+                    .references("visual_analyses", onDelete: .cascade)
+                t.column("sceneIndex", .integer).notNull()
+                t.column("startTime", .double).notNull()
+                t.column("endTime", .double).notNull()
+                t.column("description", .text).notNull()
+                t.column("tags", .text)
+                t.column("sceneType", .text)
+                t.column("createdAt", .text).notNull().defaults(sql: "(datetime('now'))")
+            }
+
+            try db.create(index: "idx_visual_scenes_analysisId",
+                          on: "visual_scenes", columns: ["analysisId"])
+        }
     }
 }

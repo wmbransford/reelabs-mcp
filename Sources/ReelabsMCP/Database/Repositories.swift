@@ -255,3 +255,55 @@ struct PresetRepository: Sendable {
         }
     }
 }
+
+// MARK: - Visual Analysis Repository
+
+struct VisualAnalysisRepository: Sendable {
+    let dbPool: DatabasePool
+
+    func create(_ analysis: VisualAnalysis) throws -> VisualAnalysis {
+        try dbPool.write { db in
+            var a = analysis
+            try a.insert(db)
+            return a
+        }
+    }
+
+    func update(id: Int64, frameCount: Int? = nil, framesDir: String? = nil, status: String? = nil, sceneCount: Int? = nil) throws {
+        try dbPool.write { db in
+            guard var analysis = try VisualAnalysis.fetchOne(db, key: id) else { return }
+            if let frameCount { analysis.frameCount = frameCount }
+            if let framesDir { analysis.framesDir = framesDir }
+            if let status { analysis.status = status }
+            if let sceneCount { analysis.sceneCount = sceneCount }
+            try analysis.update(db)
+        }
+    }
+
+    func get(id: Int64) throws -> VisualAnalysis? {
+        try dbPool.read { db in
+            try VisualAnalysis.fetchOne(db, key: id)
+        }
+    }
+
+    func getScenes(analysisId: Int64) throws -> [VisualScene] {
+        try dbPool.read { db in
+            try VisualScene
+                .filter(Column("analysisId") == analysisId)
+                .order(Column("sceneIndex"))
+                .fetchAll(db)
+        }
+    }
+
+    func storeScenes(analysisId: Int64, scenes: [VisualScene]) throws {
+        try dbPool.write { db in
+            for var scene in scenes {
+                try scene.insert(db)
+            }
+            guard var analysis = try VisualAnalysis.fetchOne(db, key: analysisId) else { return }
+            analysis.status = "analyzed"
+            analysis.sceneCount = scenes.count
+            try analysis.update(db)
+        }
+    }
+}

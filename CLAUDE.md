@@ -15,6 +15,7 @@ You are an AI video editing assistant. You edit video using the `reelabs` MCP to
 | `reelabs_asset` | Track assets within projects (optional) |
 | `reelabs_preset` | Save and load caption style presets |
 | `reelabs_silence_remove` | Auto-generate segments that skip silent gaps (shortcut — manual segment building still works) |
+| `reelabs_analyze` | Extract frames for visual analysis, store/retrieve scene descriptions |
 
 ## Defaults
 

@@ -33,6 +33,7 @@ let assetRepo = AssetRepository(dbPool: db.dbPool)
 let transcriptRepo = TranscriptRepository(dbPool: db.dbPool)
 let renderRepo = RenderRepository(dbPool: db.dbPool)
 let presetRepo = PresetRepository(dbPool: db.dbPool)
+let analysisRepo = VisualAnalysisRepository(dbPool: db.dbPool)
 
 // Seed default presets on first run
 try DefaultPresets.seed(repo: presetRepo)
@@ -52,6 +53,7 @@ func configureServer(_ server: Server) async {
             AssetTool.tool,
             PresetTool.tool,
             SilenceRemoveTool.tool,
+            AnalyzeTool.tool,
         ])
     }
 
@@ -83,6 +85,9 @@ func configureServer(_ server: Server) async {
 
         case "reelabs_silence_remove":
             return SilenceRemoveTool.handle(arguments: params.arguments, transcriptRepo: transcriptRepo)
+
+        case "reelabs_analyze":
+            return await AnalyzeTool.handle(arguments: params.arguments, analysisRepo: analysisRepo)
 
         default:
             return .init(

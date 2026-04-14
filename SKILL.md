@@ -61,6 +61,107 @@ Word-level timestamps are stored internally in the database and used automatical
 - Segments are padded, clamped to `[0, duration]`, and merged when padding causes overlap.
 - Drop the `segments` array directly into a RenderSpec, or adjust individual segments before rendering.
 
+## Visual Analysis
+
+`reelabs_analyze` extracts frames from video for visual analysis by a vision-capable sub-agent. Results are stored for later querying.
+
+### Extract Action
+
+Extracts frames at a given sample rate and saves them as 720px JPEGs.
+
+**Inputs:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `action` | string | yes | — | `"extract"` |
+| `path` | string | yes | — | Absolute path to video file |
+| `sample_fps` | double | no | 1.0 | Frames per second to sample |
+| `asset_id` | int | no | — | Optional asset ID to link analysis to |
+
+**Output:**
+
+```json
+{
+  "analysis_id": 1,
+  "duration_seconds": 120.5,
+  "frame_count": 121,
+  "sample_fps": 1.0,
+  "frames_dir": "~/Library/Application Support/ReelabsMCP/frames/1/",
+  "frames": [
+    {"time": 0.0, "path": "/full/path/to/frame_0000.jpg"},
+    {"time": 1.0, "path": "/full/path/to/frame_0001.jpg"}
+  ]
+}
+```
+
+### Store Action
+
+Persists scene analysis from a sub-agent.
+
+**Inputs:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | yes | `"store"` |
+| `analysis_id` | int | yes | From extract response |
+| `scenes` | array | yes | Array of scene objects |
+
+Each scene object:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `start_time` | double | yes | Scene start in seconds |
+| `end_time` | double | yes | Scene end in seconds |
+| `description` | string | yes | What happens visually |
+| `tags` | string[] | no | Descriptive tags |
+| `scene_type` | string | no | Classification (e.g. "talking_head", "demo", "b-roll") |
+
+**Output:**
+
+```json
+{
+  "analysis_id": 1,
+  "scenes_stored": 5,
+  "status": "analyzed"
+}
+```
+
+### Get Action
+
+Retrieves a stored analysis with all scenes.
+
+**Inputs:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | yes | `"get"` |
+| `id` | int | yes | Analysis ID |
+
+**Output:**
+
+```json
+{
+  "analysis_id": 1,
+  "source_path": "/path/to/video.mp4",
+  "status": "analyzed",
+  "sample_fps": 1.0,
+  "duration_seconds": 120.5,
+  "frame_count": 121,
+  "scene_count": 5,
+  "frames_dir": "~/Library/Application Support/ReelabsMCP/frames/1/",
+  "scenes": [
+    {
+      "scene_index": 0,
+      "start_time": 0.0,
+      "end_time": 15.3,
+      "description": "Host introduces the topic at desk",
+      "tags": ["intro", "talking_head"],
+      "scene_type": "talking_head"
+    }
+  ]
+}
+```
+
 ## RenderSpec Format
 
 ```json
