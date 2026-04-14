@@ -27,6 +27,40 @@
 
 Word-level timestamps are stored internally in the database and used automatically by the caption renderer. The agent works with utterance-level timestamps for segment selection.
 
+## Silence Remove Response
+
+`reelabs_silence_remove` analyzes a transcript and returns segments that skip silent gaps, ready to drop into a RenderSpec.
+
+**Inputs:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `transcript_id` | int | yes | — | Transcript to process |
+| `gap_threshold` | double | no | 0.4 | Remove gaps >= this many seconds |
+| `padding` | double | no | 0.15 | Seconds of padding before/after each utterance |
+
+**Output:**
+
+```json
+{
+  "source_path": "/path/to/source.mp4",
+  "transcript_id": 1,
+  "gap_threshold": 0.4,
+  "gaps_removed": 5,
+  "time_saved_seconds": 8.2,
+  "original_duration_seconds": 45.2,
+  "segments": [
+    {"sourceId": "main", "start": 0.0, "end": 2.65},
+    {"sourceId": "main", "start": 3.15, "end": 5.25},
+    {"sourceId": "main", "start": 7.45, "end": 12.45}
+  ]
+}
+```
+
+- **segments** use `sourceId: "main"` by convention — replace if your source uses a different ID.
+- Segments are padded, clamped to `[0, duration]`, and merged when padding causes overlap.
+- Drop the `segments` array directly into a RenderSpec, or adjust individual segments before rendering.
+
 ## RenderSpec Format
 
 ```json

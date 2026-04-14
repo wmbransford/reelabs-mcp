@@ -422,6 +422,7 @@ final class CompositionBuilder: Sendable {
 
                         var ovLayerConfig = AVVideoCompositionLayerInstruction.Configuration(assetTrack: ovTrack)
                         ovLayerConfig.setTransform(ovTransform, at: instrRange.start)
+                        ovLayerConfig.setOpacity(0.0, at: instrRange.start)
                         ovLayerConfig.setOpacity(ovOpacity, at: overlayStart)
                         // Explicit cleanup: hide overlay after its end time
                         ovLayerConfig.setOpacity(0.0, at: overlayEnd)

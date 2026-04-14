@@ -14,6 +14,7 @@ You are an AI video editing assistant. You edit video using the `reelabs` MCP to
 | `reelabs_project` | Organize work into projects (optional) |
 | `reelabs_asset` | Track assets within projects (optional) |
 | `reelabs_preset` | Save and load caption style presets |
+| `reelabs_silence_remove` | Auto-generate segments that skip silent gaps (shortcut — manual segment building still works) |
 
 ## Defaults
 
@@ -29,6 +30,7 @@ You are an AI video editing assistant. You edit video using the `reelabs` MCP to
 2. **Transcribe** the source file. Save the `transcript_id` for captions.
 3. **Analyze** the transcript. Identify retakes, dead air, filler ("um", "uh"), false starts, and off-topic tangents. Large `gap` values (>2s) indicate pauses.
 4. **Build segments** from utterance timestamps. Keep only the good takes. Pad ~0.15s before the first word and after the last word of each segment. Use MULTIPLE segments — that's how you cut out the bad parts.
+   - **Shortcut:** Use `reelabs_silence_remove` to auto-generate segments that skip silent gaps. Then adjust or filter the returned segments as needed.
 5. **Render** with the segments, captions, and any other settings.
 
 ## Editing Rules

@@ -425,12 +425,20 @@ final class ChirpClient: Sendable {
     }
 
     /// Shared parser for the results array (same structure in both sync and batch).
+    ///
+    /// Chirp batch API splits long audio into chunks and may return result blocks
+    /// with chunk-relative timestamps (resetting to 0) instead of absolute offsets.
+    /// We detect this by checking if a block's first word startTime jumps backward
+    /// relative to the running maximum startTime, and apply a cumulative offset.
+    /// We track startTime (not endTime) because Chirp sometimes omits endOffset.
     private func parseResultsArray(_ results: [[String: Any]]) -> TranscriptData {
         var words: [TranscriptWord] = []
         var fullTextParts: [String] = []
-        var maxEndTime: Double = 0
+        // Track the highest absolute startTime seen — more reliable than endTime
+        // because Chirp sometimes omits endOffset or returns incorrect endTimes.
+        var runningMaxStart: Double = 0
 
-        for result in results {
+        for (blockIdx, result) in results.enumerated() {
             guard let alternatives = result["alternatives"] as? [[String: Any]],
                   let alternative = alternatives.first else { continue }
 
@@ -438,24 +446,71 @@ final class ChirpClient: Sendable {
                 fullTextParts.append(transcript)
             }
 
-            if let wordInfos = alternative["words"] as? [[String: Any]] {
-                for wordInfo in wordInfos {
-                    let word = wordInfo["word"] as? String ?? ""
-                    let startTime = parseDurationValue(wordInfo["startOffset"])
-                    let endTime = parseDurationValue(wordInfo["endOffset"])
-                    let confidence = wordInfo["confidence"] as? Double
+            guard let wordInfos = alternative["words"] as? [[String: Any]], !wordInfos.isEmpty else { continue }
 
-                    words.append(TranscriptWord(
-                        word: word,
-                        startTime: startTime,
-                        endTime: endTime,
-                        confidence: confidence
-                    ))
+            // Parse raw timestamps for this block
+            var blockWords: [(word: String, start: Double, end: Double, confidence: Double?)] = []
+            for wordInfo in wordInfos {
+                let word = wordInfo["word"] as? String ?? ""
+                let startTime = parseDurationValue(wordInfo["startOffset"])
+                let endTime = parseDurationValue(wordInfo["endOffset"])
+                let confidence = wordInfo["confidence"] as? Double
+                blockWords.append((word, startTime, endTime, confidence))
+            }
 
-                    maxEndTime = max(maxEndTime, endTime)
+            // Detect chunk-relative offsets: if the first word in this block starts
+            // significantly before the running max startTime, this block's timestamps
+            // are relative to a chunk boundary rather than absolute audio time.
+            let blockFirstStart = blockWords[0].start
+            var offset: Double = 0
+            if blockIdx > 0 && blockFirstStart < runningMaxStart - 0.5 {
+                offset = runningMaxStart
+                captionLog("[ChirpClient] Block \(blockIdx): chunk-relative detected (firstStart=\(blockFirstStart), runningMaxStart=\(runningMaxStart)), applying offset=\(offset)")
+            }
+
+            for bw in blockWords {
+                let adjustedStart = bw.start + offset
+                let adjustedEnd = bw.end + offset
+                words.append(TranscriptWord(
+                    word: bw.word,
+                    startTime: adjustedStart,
+                    endTime: adjustedEnd,
+                    confidence: bw.confidence
+                ))
+                if adjustedStart > runningMaxStart {
+                    runningMaxStart = adjustedStart
                 }
             }
         }
+
+        // Fix invalid timestamps:
+        // 1. endTime <= startTime (Chirp omitted endOffset, parsed as 0)
+        // 2. endTime unreasonably far from startTime (chunk boundary artifacts)
+        // Use next word's startTime as a natural boundary.
+        for i in 0..<words.count {
+            let nextStart = (i + 1 < words.count) ? words[i + 1].startTime : nil
+
+            if words[i].endTime <= words[i].startTime {
+                // Missing or zero endOffset — estimate from next word
+                let fallbackEnd = nextStart ?? (words[i].startTime + 0.3)
+                words[i] = TranscriptWord(
+                    word: words[i].word,
+                    startTime: words[i].startTime,
+                    endTime: max(fallbackEnd, words[i].startTime + 0.01),
+                    confidence: words[i].confidence
+                )
+            } else if let ns = nextStart, words[i].endTime > ns + 0.5 {
+                // endTime extends well past the next word — clamp it
+                words[i] = TranscriptWord(
+                    word: words[i].word,
+                    startTime: words[i].startTime,
+                    endTime: ns,
+                    confidence: words[i].confidence
+                )
+            }
+        }
+
+        let maxEndTime = words.last.map { max($0.endTime, $0.startTime) } ?? 0
 
         return TranscriptData(
             words: words,

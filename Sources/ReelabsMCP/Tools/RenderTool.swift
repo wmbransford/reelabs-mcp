@@ -215,13 +215,23 @@ private func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) ->
         compositionTime += duration
     }
 
+    // Log segment mappings for debugging
+    for (i, m) in mappings.enumerated() {
+        captionLog("[remapTranscript] seg[\(i)]: source=\(m.sourceStart)-\(m.sourceEnd) → comp=\(m.compositionStart), speed=\(m.speed)")
+    }
+
     var remapped: [TranscriptWord] = []
     for word in data.words {
-        for m in mappings {
+        for (segIdx, m) in mappings.enumerated() {
             if word.startTime >= m.sourceStart && word.startTime < m.sourceEnd {
                 let newStart = m.compositionStart + (word.startTime - m.sourceStart) / m.speed
                 let clampedEnd = min(word.endTime, m.sourceEnd)
                 let newEnd = m.compositionStart + (clampedEnd - m.sourceStart) / m.speed
+                // Drop words with invalid timing (endTime < startTime after remap)
+                if newEnd <= newStart {
+                    captionLog("[remapTranscript] DROPPED '\(word.word)': src=\(word.startTime)-\(word.endTime) seg[\(segIdx)]=\(m.sourceStart)-\(m.sourceEnd) → comp=\(newStart)-\(newEnd)")
+                    break
+                }
                 remapped.append(TranscriptWord(
                     word: word.word,
                     startTime: newStart,
@@ -232,6 +242,9 @@ private func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) ->
             }
         }
     }
+
+    let dropped = data.words.count - remapped.count
+    captionLog("[remapTranscript] Result: \(remapped.count)/\(data.words.count) words mapped (\(dropped) dropped), compositionDuration=\(round(compositionTime * 1000) / 1000)s")
 
     return TranscriptData(
         words: remapped,

@@ -51,6 +51,7 @@ func configureServer(_ server: Server) async {
             ProjectTool.tool,
             AssetTool.tool,
             PresetTool.tool,
+            SilenceRemoveTool.tool,
         ])
     }
 
@@ -79,6 +80,9 @@ func configureServer(_ server: Server) async {
 
         case "reelabs_preset":
             return PresetTool.handle(arguments: params.arguments, presetRepo: presetRepo)
+
+        case "reelabs_silence_remove":
+            return SilenceRemoveTool.handle(arguments: params.arguments, transcriptRepo: transcriptRepo)
 
         default:
             return .init(
