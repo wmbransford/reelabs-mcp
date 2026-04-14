@@ -7,6 +7,8 @@ struct ServerConfig: Sendable {
     let serviceAccountPath: String?
     let databasePath: String?
     let gcsBucket: String
+    let httpPort: Int?
+    let httpHost: String?
 
     static func load() -> ServerConfig {
         // Resolve config.json relative to the binary or current directory
@@ -38,7 +40,9 @@ struct ServerConfig: Sendable {
                     chirpModel: json["chirp_model"] as? String ?? "chirp_3",
                     serviceAccountPath: saPath,
                     databasePath: json["database_path"] as? String,
-                    gcsBucket: json["gcs_bucket"] as? String ?? ""
+                    gcsBucket: json["gcs_bucket"] as? String ?? "",
+                    httpPort: json["http_port"] as? Int,
+                    httpHost: json["http_host"] as? String
                 )
             }
         }
@@ -49,7 +53,9 @@ struct ServerConfig: Sendable {
             chirpModel: "chirp_3",
             serviceAccountPath: nil,
             databasePath: nil,
-            gcsBucket: ""
+            gcsBucket: "",
+            httpPort: nil,
+            httpHost: nil
         )
     }
 }

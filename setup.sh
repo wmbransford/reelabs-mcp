@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY_NAME="ReelabsMCP"
+PLIST_LABEL="com.reelabs.mcp"
+PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+MCP_PORT=52849
 
 echo "=== ReeLabs MCP v2 Setup ==="
 echo ""
@@ -22,68 +25,95 @@ fi
 echo "Binary built at: $BINARY_PATH"
 echo ""
 
-# Register with Claude Code
-CLAUDE_CONFIG="$HOME/.claude/settings.json"
-CLAUDE_DIR="$HOME/.claude"
+# --- launchd daemon setup ---
+echo "Setting up launchd daemon..."
 
-mkdir -p "$CLAUDE_DIR"
+# Resolve GOOGLE_APPLICATION_CREDENTIALS
+GOOGLE_CREDS="${GOOGLE_APPLICATION_CREDENTIALS:-$SCRIPT_DIR/service-account.json}"
 
-# Check if settings.json exists and has mcpServers
-if [ -f "$CLAUDE_CONFIG" ]; then
-    # Use python3 to merge the config
-    python3 -c "
-import json, sys
-
-config_path = '$CLAUDE_CONFIG'
-binary_path = '$BINARY_PATH'
-
-with open(config_path, 'r') as f:
-    config = json.load(f)
-
-if 'mcpServers' not in config:
-    config['mcpServers'] = {}
-
-config['mcpServers']['reelabs'] = {
-    'command': binary_path,
-    'args': [],
-    'env': {}
-}
-
-with open(config_path, 'w') as f:
-    json.dump(config, f, indent=2)
-
-print('Updated Claude config at:', config_path)
-"
-else
-    # Create new config
-    python3 -c "
-import json
-
-config = {
-    'mcpServers': {
-        'reelabs': {
-            'command': '$BINARY_PATH',
-            'args': [],
-            'env': {}
-        }
-    }
-}
-
-with open('$CLAUDE_CONFIG', 'w') as f:
-    json.dump(config, f, indent=2)
-
-print('Created Claude config at: $CLAUDE_CONFIG')
-"
+# Unload existing agent if running
+if launchctl list 2>/dev/null | grep -q "$PLIST_LABEL"; then
+    echo "Stopping existing daemon..."
+    launchctl bootout "gui/$(id -u)/$PLIST_LABEL" 2>/dev/null || true
+    sleep 1
 fi
+
+# Generate launchd plist
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$PLIST_PATH" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${BINARY_PATH}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>${SCRIPT_DIR}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GOOGLE_APPLICATION_CREDENTIALS</key>
+        <string>${GOOGLE_CREDS}</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardErrorPath</key>
+    <string>/tmp/reelabs-mcp.stderr.log</string>
+    <key>StandardOutPath</key>
+    <string>/tmp/reelabs-mcp.stdout.log</string>
+</dict>
+</plist>
+PLIST
+
+echo "Created plist at: $PLIST_PATH"
+
+# Load the agent
+launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
+echo "Daemon loaded."
+
+# Wait for it to start
+sleep 2
+
+# Verify
+if launchctl list 2>/dev/null | grep -q "$PLIST_LABEL"; then
+    echo "Daemon is running."
+else
+    echo "WARNING: Daemon may not have started. Check /tmp/reelabs-mcp.stderr.log"
+fi
+
+# --- Update .mcp.json ---
+cat > "$SCRIPT_DIR/.mcp.json" <<JSON
+{
+  "mcpServers": {
+    "reelabs": {
+      "type": "http",
+      "url": "http://127.0.0.1:${MCP_PORT}/mcp"
+    }
+  }
+}
+JSON
 
 echo ""
 echo "=== Setup Complete ==="
 echo ""
-echo "MCP server registered as 'reelabs' in Claude Code."
-echo "Binary: $BINARY_PATH"
+echo "MCP server running as launchd daemon '${PLIST_LABEL}'"
+echo "  URL: http://127.0.0.1:${MCP_PORT}/mcp"
+echo "  Binary: $BINARY_PATH"
+echo "  Plist: $PLIST_PATH"
+echo "  Logs: /tmp/reelabs-mcp.stderr.log"
 echo ""
-echo "To configure Chirp transcription, edit config.json:"
-echo "  chirp_api_key: Your Google Cloud API key"
-echo "  chirp_project_id: Your Google Cloud project ID"
+echo "Commands:"
+echo "  Stop:    launchctl bootout gui/\$(id -u)/$PLIST_LABEL"
+echo "  Start:   launchctl bootstrap gui/\$(id -u) $PLIST_PATH"
+echo "  Logs:    tail -f /tmp/reelabs-mcp.stderr.log"
+echo "  Stdio:   $BINARY_PATH --stdio"
 echo ""
-echo "Restart Claude Code to pick up the new MCP server."
+echo "Restart Claude Code to pick up the HTTP transport."

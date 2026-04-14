@@ -113,6 +113,28 @@ final class ExportService: Sendable {
         diag.append("sessionCreated: true")
         diag.append("supportedFileTypes: \(session.supportedFileTypes.map(\.rawValue))")
 
+        // --- Log audio state for debugging ---
+        let audioTracks = composition.tracks(withMediaType: .audio)
+        captionLog("[Audio] composition audioTracks: \(audioTracks.count)")
+        for (i, at) in audioTracks.enumerated() {
+            let segs = at.segments ?? []
+            let totalSec = CMTimeGetSeconds(at.timeRange.duration)
+            captionLog("[Audio]   track[\(i)] id=\(at.trackID) segments=\(segs.count) duration=\(round(totalSec * 100) / 100)s")
+            for (j, seg) in segs.enumerated() {
+                let segStart = CMTimeGetSeconds(seg.timeMapping.target.start)
+                let segDur = CMTimeGetSeconds(seg.timeMapping.target.duration)
+                captionLog("[Audio]     seg[\(j)] start=\(round(segStart * 100) / 100) dur=\(round(segDur * 100) / 100) empty=\(seg.isEmpty)")
+            }
+        }
+        if let am = audioMix {
+            captionLog("[Audio] audioMix: \(am.inputParameters.count) params")
+            for (i, p) in am.inputParameters.enumerated() {
+                captionLog("[Audio]   param[\(i)] trackID=\(p.trackID)")
+            }
+        } else {
+            captionLog("[Audio] audioMix: nil")
+        }
+
         // Apply caption burn-in if configured
         var didApplyCaptions = false
         var captionSublayerCount = 0
@@ -204,12 +226,7 @@ final class ExportService: Sendable {
                 parentLayer.addSublayer(videoLayer)
                 parentLayer.addSublayer(captionLayer)
 
-                // DEBUG: Add a giant red rectangle — if this doesn't show, animTool is broken
-                let debugLayer = CALayer()
-                debugLayer.frame = CGRect(x: 100, y: 100, width: renderSize.width - 200, height: 200)
-                debugLayer.backgroundColor = CGColor(red: 1, green: 0, blue: 0, alpha: 0.8)
-                parentLayer.addSublayer(debugLayer)
-                captionLog("[ReeLabs Caption] DEBUG: Added red rectangle at (100,100) size=\(Int(renderSize.width - 200))x200")
+
 
                 captionLog("[ReeLabs Caption] Layer hierarchy: parent(\(parentLayer.sublayers?.count ?? 0) sublayers) > video + caption")
 

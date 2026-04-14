@@ -38,6 +38,18 @@ You are an AI video editing assistant. You edit video using the `reelabs` MCP to
 - When the user asks for captions, include `captions` in the RenderSpec with the `transcriptId` from step 2.
 - Validate complex specs before rendering.
 
+## Development Protocol: Code Change → Test Cycle
+
+When modifying the MCP server source code (anything under `Sources/`), run:
+
+```
+./dev.sh
+```
+
+This builds release, restarts the server via launchd, and verifies it's running. Then tell the user to run `/mcp` to reconnect the client. **Always use `./dev.sh` — never `swift build` alone, never `pkill`.**
+
+**Why?** The server runs from `.build/release/ReelabsMCP`, managed by a launchd agent with `KeepAlive`. `swift build` (debug) doesn't update the release binary. `pkill` just makes launchd respawn the old binary. `./dev.sh` handles both correctly.
+
 ## Technical Reference
 
 **Always read `SKILL.md` before building a RenderSpec.** Do not guess field names from memory — the exact schema (field names, nesting, types) is defined there and nowhere else.

@@ -5,21 +5,17 @@ import Foundation
 import QuartzCore
 
 enum CaptionLayer {
-    /// Create a CALayer tree with word-by-word color-animated captions.
-    /// Each word group appears during its time window. Within each group,
-    /// the active word is highlighted in `highlightColor` while others stay
-    /// in `color`. This produces the TikTok-style karaoke effect.
+    /// Create a CALayer tree with word-by-word captions using pre-rendered CGImages.
+    /// CATextLayer does not render in headless CLI processes (no window server),
+    /// so all text is rasterized via Core Graphics and set as CALayer.contents.
     static func createOverlay(
         transcriptData: TranscriptData,
         config: CaptionConfig,
         videoSize: CGSize,
         totalDuration: Double
     ) -> CALayer {
-        let scale: CGFloat = NSScreen.main?.backingScaleFactor ?? 2.0
-
         let parentLayer = CALayer()
         parentLayer.frame = CGRect(origin: .zero, size: videoSize)
-        parentLayer.contentsScale = scale
 
         guard totalDuration > 0 else {
             captionLog("[CaptionLayer] SKIP: totalDuration=0")
@@ -31,19 +27,16 @@ enum CaptionLayer {
         let allCaps = config.allCaps ?? true
         let shadow = config.shadow ?? true
         let position = (config.position ?? 70.0) / 100.0 * videoSize.height
-
         let stripPunctuation = !(config.punctuation ?? true)
 
         let textColor = parseColor(config.color ?? "#FFFFFF")
         let highlightColor = parseColor(config.highlightColor ?? config.color ?? "#FFFFFF")
         let hasHighlight = config.highlightColor != nil
 
-        // Create font — use descriptor with weight trait when fontWeight is set
         let font = resolveFont(family: config.fontFamily, weight: config.fontWeight, size: fontSize)
 
         captionLog("[CaptionLayer] Config: fontSize=\(fontSize)px, position=\(position)px, wordsPerGroup=\(wordsPerGroup), hasHighlight=\(hasHighlight), allCaps=\(allCaps), shadow=\(shadow)")
         captionLog("[CaptionLayer] Font: \(CTFontCopyFullName(font) as String? ?? "unknown"), size=\(CTFontGetSize(font))")
-        captionLog("[CaptionLayer] videoSize=\(Int(videoSize.width))x\(Int(videoSize.height)), totalDuration=\(totalDuration)s")
 
         // Filter words: must have valid timestamps and fall within composition
         let relevantWords = transcriptData.words.filter { word in
@@ -52,175 +45,202 @@ enum CaptionLayer {
         let groups = groupWords(relevantWords, wordsPerGroup: wordsPerGroup)
 
         let invalidCount = transcriptData.words.count - relevantWords.count
-        captionLog("[CaptionLayer] Total words=\(transcriptData.words.count), valid=\(relevantWords.count), invalid=\(invalidCount), groups=\(groups.count)")
-        if invalidCount > 0 {
-            let badWords = transcriptData.words.filter { $0.startTime < 0 || $0.endTime <= $0.startTime }
-            for bw in badWords.prefix(5) {
-                captionLog("[CaptionLayer] INVALID WORD: '\(bw.word)' start=\(bw.startTime) end=\(bw.endTime)")
-            }
-        }
+        captionLog("[CaptionLayer] words=\(relevantWords.count), invalid=\(invalidCount), groups=\(groups.count)")
+
+        let maxWidth = videoSize.width * 0.9
 
         for group in groups {
             autoreleasepool {
-            guard let firstWord = group.first, let lastWord = group.last else { return }
-            let startSec = firstWord.startTime
-            let endSec = min(lastWord.endTime, totalDuration)
-            guard endSec > startSec else { return }
+                guard let firstWord = group.first, let lastWord = group.last else { return }
+                let startSec = firstWord.startTime
+                let endSec = min(lastWord.endTime, totalDuration)
+                guard endSec > startSec else { return }
 
-            // --- Build the group layer (contains per-word sublayers) ---
-            let groupLayer = CALayer()
-            groupLayer.frame = CGRect(origin: .zero, size: videoSize)
-            groupLayer.contentsScale = scale
+                let groupStartFrac = max(startSec / totalDuration, 0)
+                let groupEndFrac = min(max(endSec / totalDuration, groupStartFrac + 0.0001), 1.0)
 
-            // Base paragraph style
-            let paragraphStyle = NSMutableParagraphStyle()
-            paragraphStyle.alignment = .center
+                // Measure full group text for centering
+                let fullText = group.map { formatWord($0.word, allCaps: allCaps, stripPunctuation: stripPunctuation) }.joined(separator: " ")
+                let fullSize = measureText(fullText, font: font, shadow: shadow, maxWidth: maxWidth)
 
-            // Measure the full group text to position the group
-            let fullText = group.map { formatWord($0.word, allCaps: allCaps, stripPunctuation: stripPunctuation) }.joined(separator: " ")
-            let maxWidth = videoSize.width * 0.9
-            var baseAttributes: [NSAttributedString.Key: Any] = [
-                .font: font,
-                .foregroundColor: NSColor(cgColor: textColor) ?? NSColor.white,
-                .paragraphStyle: paragraphStyle
-            ]
+                let layerX = (videoSize.width - fullSize.width) / 2
+                // position is measured from top (e.g. 70% = 70% down from top).
+                // Parent has isGeometryFlipped=true, so Y increases downward.
+                let layerY = position - fullSize.height / 2
 
-            if shadow {
-                let shadowObj = NSShadow()
-                shadowObj.shadowOffset = CGSize(width: 0, height: 2)
-                shadowObj.shadowBlurRadius = 4
-                shadowObj.shadowColor = NSColor(red: 0, green: 0, blue: 0, alpha: 0.8)
-                baseAttributes[.shadow] = shadowObj
-            }
+                if hasHighlight {
+                    // Word-by-word highlight with automatic line wrapping
+                    let spaceWidth = measureText(" ", font: font, shadow: shadow, maxWidth: maxWidth).width
 
-            let textSize = (fullText as NSString).boundingRect(
-                with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin],
-                attributes: baseAttributes
-            ).size
-
-            let layerX = (videoSize.width - textSize.width) / 2
-            // position is measured from top (e.g. 70% = 70% down from top).
-            // The export parent is geometry-flipped but this caption layer is not,
-            // so convert to bottom-left origin: y = (height - position) - center offset.
-            let layerY = (videoSize.height - position) - textSize.height / 2
-            let groupFrame = CGRect(
-                x: layerX,
-                y: layerY,
-                width: textSize.width + 8,
-                height: textSize.height + 4
-            )
-
-            if hasHighlight {
-                // --- Word-by-word highlight mode ---
-                // Create one text layer per word, positioned inline.
-                // Use attributes WITHOUT .foregroundColor so that the CATextLayer's
-                // foregroundColor property (animated via keyframes) controls the color.
-                var wordAttributes = baseAttributes
-                wordAttributes.removeValue(forKey: .foregroundColor)
-
-                var currentX: CGFloat = 4 // padding offset
-                let spaceWidth = (" " as NSString).size(withAttributes: baseAttributes).width
-
-                for (_, wordData) in group.enumerated() {
-                    let wordText = formatWord(wordData.word, allCaps: allCaps, stripPunctuation: stripPunctuation)
-                    let wordSize = (wordText as NSString).size(withAttributes: baseAttributes)
-
-                    let wordLayer = CATextLayer()
-                    wordLayer.contentsScale = scale
-                    wordLayer.foregroundColor = textColor
-                    wordLayer.frame = CGRect(
-                        x: groupFrame.minX + currentX,
-                        y: groupFrame.minY,
-                        width: wordSize.width + 2,
-                        height: groupFrame.height
-                    )
-                    wordLayer.alignmentMode = .center
-
-                    // Set text without foreground color — the layer property handles it
-                    let wordAttrString = NSAttributedString(string: wordText, attributes: wordAttributes)
-                    wordLayer.string = wordAttrString
-
-                    // Animate foreground color: base → highlight → base
-                    // Clamp all timestamps to valid range [0, totalDuration]
-                    let wordStart = max(wordData.startTime, 0)
-                    let wordEnd = max(min(wordData.endTime, totalDuration), wordStart + 0.01)
-
-                    let wordStartFrac = max(wordStart / totalDuration, 0)
-                    let wordEndFrac = min(max(wordEnd / totalDuration, wordStartFrac + 0.0001), 1.0)
-                    let groupStartFrac = max(startSec / totalDuration, 0)
-                    let groupEndFrac = min(max(endSec / totalDuration, groupStartFrac + 0.0001), 1.0)
-                    let eps = 0.0001
-
-                    // Color animation: switch to highlight during this word's time
-                    let colorAnim = CAKeyframeAnimation(keyPath: "foregroundColor")
-                    var colorKeyTimes: [NSNumber] = []
-                    var colorValues: [CGColor] = []
-
-                    // Before word: base color
-                    if wordStartFrac > groupStartFrac + eps {
-                        colorKeyTimes.append(NSNumber(value: max(groupStartFrac, 0)))
-                        colorValues.append(textColor)
-                        colorKeyTimes.append(NSNumber(value: wordStartFrac - eps))
-                        colorValues.append(textColor)
+                    // Pre-render all words so we can measure before placing
+                    struct WordRender {
+                        let wordData: TranscriptWord
+                        let baseImage: CGImage
+                        let baseSize: CGSize
+                        let hlImage: CGImage?
                     }
-                    // During word: highlight
-                    colorKeyTimes.append(NSNumber(value: max(wordStartFrac, 0)))
-                    colorValues.append(highlightColor)
-                    colorKeyTimes.append(NSNumber(value: min(wordEndFrac, 1.0)))
-                    colorValues.append(highlightColor)
-                    // After word: base color
-                    if wordEndFrac < groupEndFrac - eps {
-                        colorKeyTimes.append(NSNumber(value: wordEndFrac + eps))
-                        colorValues.append(textColor)
-                        colorKeyTimes.append(NSNumber(value: min(groupEndFrac, 1.0)))
-                        colorValues.append(textColor)
+                    var renders: [WordRender] = []
+                    for wordData in group {
+                        let wordText = formatWord(wordData.word, allCaps: allCaps, stripPunctuation: stripPunctuation)
+                        guard let (baseImage, baseSize) = renderTextToImage(
+                            text: wordText, font: font, color: textColor, shadow: shadow, maxWidth: maxWidth
+                        ) else { continue }
+                        let hlImage = renderTextToImage(
+                            text: wordText, font: font, color: highlightColor, shadow: shadow, maxWidth: maxWidth
+                        )?.0
+                        renders.append(WordRender(wordData: wordData, baseImage: baseImage, baseSize: baseSize, hlImage: hlImage))
                     }
 
-                    colorAnim.keyTimes = colorKeyTimes
-                    colorAnim.values = colorValues
-                    colorAnim.beginTime = AVCoreAnimationBeginTimeAtZero
-                    colorAnim.duration = totalDuration
-                    colorAnim.fillMode = .both
-                    colorAnim.isRemovedOnCompletion = false
-                    wordLayer.add(colorAnim, forKey: "wordHighlight")
+                    // Break words into lines that fit within maxWidth
+                    var lines: [[WordRender]] = []
+                    var currentLine: [WordRender] = []
+                    var lineW: CGFloat = 0
+                    captionLog("[CaptionLayer] Line-wrap: maxWidth=\(maxWidth), spaceWidth=\(spaceWidth), wordCount=\(renders.count)")
+                    for r in renders {
+                        let needed = currentLine.isEmpty ? r.baseSize.width : r.baseSize.width + spaceWidth
+                        captionLog("[CaptionLayer]   word='\(r.wordData.word)' imgW=\(r.baseSize.width) needed=\(needed) lineW=\(lineW) wouldBe=\(lineW + needed)")
+                        if !currentLine.isEmpty && lineW + needed > maxWidth {
+                            captionLog("[CaptionLayer]   -> LINE BREAK (lineW+needed \(lineW + needed) > maxWidth \(maxWidth))")
+                            lines.append(currentLine)
+                            currentLine = [r]
+                            lineW = r.baseSize.width
+                        } else {
+                            currentLine.append(r)
+                            lineW += needed
+                        }
+                    }
+                    if !currentLine.isEmpty { lines.append(currentLine) }
+                    captionLog("[CaptionLayer] Line-wrap result: \(lines.count) lines from \(renders.count) words")
 
-                    // Opacity: show only during group time
+                    let lineHeight = renders.first.map { $0.baseSize.height } ?? CGFloat(fontSize)
+                    let totalTextHeight = lineHeight * CGFloat(lines.count)
+                    let baseY = position - totalTextHeight / 2
+
+                    for (lineIdx, line) in lines.enumerated() {
+                        let thisLineW = line.enumerated().reduce(CGFloat(0)) { acc, pair in
+                            acc + pair.element.baseSize.width + (pair.offset > 0 ? spaceWidth : 0)
+                        }
+                        let lineX = (videoSize.width - thisLineW) / 2
+                        let lineY = baseY + CGFloat(lineIdx) * lineHeight
+                        var currentX: CGFloat = 0
+
+                        for r in line {
+                            let wordFrame = CGRect(x: lineX + currentX, y: lineY, width: r.baseSize.width, height: r.baseSize.height)
+
+                            // Base color layer — visible during entire group time
+                            let baseLayer = CALayer()
+                            baseLayer.frame = wordFrame
+                            baseLayer.contents = r.baseImage
+                            addVisibilityAnimation(to: baseLayer, startFrac: groupStartFrac, endFrac: groupEndFrac, totalDuration: totalDuration)
+                            parentLayer.addSublayer(baseLayer)
+
+                            // Highlight color layer — visible only during this word's time
+                            if let hlImage = r.hlImage {
+                                let hlLayer = CALayer()
+                                hlLayer.frame = wordFrame
+                                hlLayer.contents = hlImage
+                                let wordStart = max(r.wordData.startTime, 0)
+                                let wordEnd = max(min(r.wordData.endTime, totalDuration), wordStart + 0.01)
+                                let wordStartFrac = max(wordStart / totalDuration, 0)
+                                let wordEndFrac = min(max(wordEnd / totalDuration, wordStartFrac + 0.0001), 1.0)
+                                addVisibilityAnimation(to: hlLayer, startFrac: wordStartFrac, endFrac: wordEndFrac, totalDuration: totalDuration)
+                                parentLayer.addSublayer(hlLayer)
+                            }
+
+                            currentX += r.baseSize.width + spaceWidth
+                        }
+                    }
+                } else {
+                    // Simple mode — full group text as one image
+                    guard let (image, imgSize) = renderTextToImage(
+                        text: fullText, font: font, color: textColor, shadow: shadow, maxWidth: maxWidth
+                    ) else { return }
+
+                    let textLayer = CALayer()
+                    textLayer.frame = CGRect(x: layerX, y: layerY, width: imgSize.width, height: imgSize.height)
+                    textLayer.contents = image
+
                     addVisibilityAnimation(
-                        to: wordLayer,
-                        startFrac: groupStartFrac,
-                        endFrac: groupEndFrac,
+                        to: textLayer,
+                        startFrac: startSec / totalDuration,
+                        endFrac: endSec / totalDuration,
                         totalDuration: totalDuration
                     )
-
-                    groupLayer.addSublayer(wordLayer)
-                    currentX += wordSize.width + spaceWidth
+                    parentLayer.addSublayer(textLayer)
                 }
-            } else {
-                // --- Simple mode (no highlight) ---
-                let textLayer = CATextLayer()
-                textLayer.contentsScale = scale
-                textLayer.string = NSAttributedString(string: fullText, attributes: baseAttributes)
-                textLayer.frame = groupFrame
-
-                addVisibilityAnimation(
-                    to: textLayer,
-                    startFrac: startSec / totalDuration,
-                    endFrac: endSec / totalDuration,
-                    totalDuration: totalDuration
-                )
-
-                groupLayer.addSublayer(textLayer)
-            }
-
-            parentLayer.addSublayer(groupLayer)
             }
         }
 
+        captionLog("[CaptionLayer] Created \(parentLayer.sublayers?.count ?? 0) sublayers")
         return parentLayer
     }
 
-    // MARK: - Helpers
+    // MARK: - CGImage Text Rendering
+
+    /// Render text into a CGImage using Core Graphics. This bypasses CATextLayer
+    /// which requires the window server and fails silently in CLI processes.
+    private static func renderTextToImage(
+        text: String,
+        font: CTFont,
+        color: CGColor,
+        shadow: Bool,
+        maxWidth: CGFloat
+    ) -> (CGImage, CGSize)? {
+        let attributes = textAttributes(font: font, color: color, shadow: shadow)
+        let attrStr = NSAttributedString(string: text, attributes: attributes)
+        let textSize = attrStr.boundingRect(
+            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin]
+        ).size
+
+        // Extra padding for shadow blur
+        let padding: CGFloat = shadow ? 12 : 4
+        let width = Int(ceil(textSize.width + padding * 2))
+        let height = Int(ceil(textSize.height + padding * 2))
+        guard width > 0 && height > 0 else { return nil }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else { return nil }
+
+        let nsCtx = NSGraphicsContext(cgContext: ctx, flipped: false)
+        NSGraphicsContext.current = nsCtx
+        attrStr.draw(at: CGPoint(x: padding, y: padding))
+        NSGraphicsContext.current = nil
+
+        guard let cgImage = ctx.makeImage() else { return nil }
+        return (cgImage, CGSize(width: CGFloat(width), height: CGFloat(height)))
+    }
+
+    private static func measureText(_ text: String, font: CTFont, shadow: Bool, maxWidth: CGFloat) -> CGSize {
+        let attributes = textAttributes(font: font, color: CGColor.white, shadow: shadow)
+        return (text as NSString).boundingRect(
+            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin],
+            attributes: attributes
+        ).size
+    }
+
+    private static func textAttributes(font: CTFont, color: CGColor, shadow: Bool) -> [NSAttributedString.Key: Any] {
+        var attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor(cgColor: color) ?? NSColor.white,
+        ]
+        if shadow {
+            let shadowObj = NSShadow()
+            shadowObj.shadowOffset = CGSize(width: 0, height: 2)
+            shadowObj.shadowBlurRadius = 4
+            shadowObj.shadowColor = NSColor(red: 0, green: 0, blue: 0, alpha: 0.8)
+            attrs[.shadow] = shadowObj
+        }
+        return attrs
+    }
+
+    // MARK: - Animation
 
     /// Add a keyframe opacity animation that makes the layer visible only during [startFrac, endFrac].
     private static func addVisibilityAnimation(
@@ -229,7 +249,6 @@ enum CaptionLayer {
         endFrac: Double,
         totalDuration: Double
     ) {
-        // Clamp to valid range — invalid fractions corrupt the entire animation tree
         let sf = max(min(startFrac, 1.0), 0)
         let ef = max(min(endFrac, 1.0), sf + 0.0001)
         let eps = 0.0001
@@ -261,6 +280,8 @@ enum CaptionLayer {
         layer.add(animation, forKey: "visibility")
     }
 
+    // MARK: - Helpers
+
     private static func groupWords(_ words: [TranscriptWord], wordsPerGroup: Int) -> [[TranscriptWord]] {
         var groups: [[TranscriptWord]] = []
         var current: [TranscriptWord] = []
@@ -277,7 +298,6 @@ enum CaptionLayer {
         return groups
     }
 
-    /// Build a CTFont using a font descriptor with family name + weight trait.
     private static func resolveFont(family: String?, weight: String?, size: CGFloat) -> CTFont {
         let familyName = family ?? "Arial"
         let weightValue = fontWeightValue(weight ?? "bold")
