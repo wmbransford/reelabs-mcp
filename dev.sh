@@ -2,7 +2,7 @@
 # Build, restart, and verify the MCP server in one step.
 # Usage: ./dev.sh
 
-set -e
+set -eo pipefail
 
 echo "Building release..."
 swift build -c release 2>&1 | tail -1

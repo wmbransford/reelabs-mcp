@@ -34,8 +34,8 @@ enum FrameExtractor {
         var frames: [ExtractedFrame] = []
 
         for await result in generator.images(for: times) {
-            let (requestedTime, cgImage, _) = result
-            let timeSeconds = CMTimeGetSeconds(requestedTime)
+            let timeSeconds = CMTimeGetSeconds(result.requestedTime)
+            let cgImage = try result.image
             let index = frames.count
             let filename = String(format: "frame_%04d.jpg", index)
             let filePath = outputDir.appendingPathComponent(filename)

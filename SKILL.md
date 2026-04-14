@@ -294,6 +294,9 @@ Example:
 | `sourceStart` | double | 0 | offset into overlay source file (seconds) |
 | `zIndex` | int | 0 | stacking order — higher values render on top |
 | `audio` | double | 0 | overlay audio volume 0.0-1.0 (0 = muted) |
+| `mainAudioVolume` | double | — | main track volume during overlay 0.0-1.0. Omit = unchanged. 0.0 = mute main, 0.3 = duck |
+| `cornerRadius` | double | 0 | 0.0 (sharp) to 1.0 (circle/pill). Maps to `cornerRadius * min(w,h) / 2` pixels |
+| `crop` | object | — | sub-region of source: `{x, y, width, height}` as 0-1 fractions. Selects region before cover-fill |
 
 Overlay sources must be declared in the `sources` array just like segment sources.
 
@@ -330,6 +333,22 @@ Example — Facecam PiP (bottom-right corner, audio enabled):
       "opacity": 1.0,
       "audio": 0.8,
       "zIndex": 1
+    }
+  ]
+}
+```
+
+Example — Circular facecam with cropped source (center 70% of frame):
+```json
+{
+  "overlays": [
+    {
+      "sourceId": "facecam",
+      "start": 0, "end": 25,
+      "x": 0.72, "y": 0.72, "width": 0.25, "height": 0.25,
+      "cornerRadius": 1.0,
+      "crop": {"x": 0.15, "y": 0.0, "width": 0.7, "height": 1.0},
+      "audio": 0.8
     }
   ]
 }

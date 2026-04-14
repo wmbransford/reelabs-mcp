@@ -159,6 +159,33 @@ enum ValidateTool {
                             issues.append("Overlay \(i): audio (\(audio)) out of range [0, 1]")
                         }
                     }
+
+                    if let cornerRadius = overlay.cornerRadius {
+                        if cornerRadius < 0 || cornerRadius > 1.0 {
+                            issues.append("Overlay \(i): cornerRadius (\(cornerRadius)) out of range [0, 1]")
+                        }
+                    }
+
+                    if let crop = overlay.crop {
+                        if crop.x < 0 || crop.x > 1.0 {
+                            issues.append("Overlay \(i): crop.x (\(crop.x)) out of range [0, 1]")
+                        }
+                        if crop.y < 0 || crop.y > 1.0 {
+                            issues.append("Overlay \(i): crop.y (\(crop.y)) out of range [0, 1]")
+                        }
+                        if crop.width <= 0 || crop.width > 1.0 {
+                            issues.append("Overlay \(i): crop.width (\(crop.width)) out of range (0, 1]")
+                        }
+                        if crop.height <= 0 || crop.height > 1.0 {
+                            issues.append("Overlay \(i): crop.height (\(crop.height)) out of range (0, 1]")
+                        }
+                        if crop.x + crop.width > 1.01 {
+                            issues.append("Overlay \(i): crop.x + crop.width (\(crop.x + crop.width)) exceeds 1.0")
+                        }
+                        if crop.y + crop.height > 1.01 {
+                            issues.append("Overlay \(i): crop.y + crop.height (\(crop.y + crop.height)) exceeds 1.0")
+                        }
+                    }
                 }
             }
 

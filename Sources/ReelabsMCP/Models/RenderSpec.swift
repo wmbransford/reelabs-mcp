@@ -185,6 +185,18 @@ struct Overlay: Codable, Sendable {
     let sourceStart: Double? // offset into overlay source file, default 0
     let zIndex: Int?        // stacking order, default 0 (higher = on top)
     let audio: Double?      // overlay audio volume 0.0-1.0, default 0 (muted)
+    let mainAudioVolume: Double? // main track volume during overlay 0.0-1.0, default nil (unchanged)
+    let cornerRadius: Double? // 0.0 (sharp) to 1.0 (circle/pill)
+    let crop: CropRect?     // sub-region of source video (0-1 fractions)
+}
+
+// MARK: - Crop Rect
+
+struct CropRect: Codable, Sendable {
+    let x: Double       // 0.0-1.0 fraction of source width
+    let y: Double       // 0.0-1.0 fraction of source height
+    let width: Double   // 0.0-1.0 fraction of source width
+    let height: Double  // 0.0-1.0 fraction of source height
 }
 
 // MARK: - Aspect Ratio

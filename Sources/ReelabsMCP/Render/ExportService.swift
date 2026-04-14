@@ -162,21 +162,29 @@ final class ExportService: Sendable {
                 } else {
                     let videoTracks = composition.tracks(withMediaType: .video)
                     captionLog("[ReeLabs Caption] Creating pass-through for \(videoTracks.count) video tracks")
-                    let ptLayerInsts = videoTracks.map { track in
-                        AVVideoCompositionLayerInstruction(
-                            configuration: .init(assetTrack: track)
+                    // Build pass-through using custom compositor
+                    let ptLayers = videoTracks.map { track in
+                        LayerInfo(
+                            trackID: track.trackID,
+                            preferredTransform: .identity,
+                            naturalSize: renderSize,
+                            transform: .identity,
+                            transformEnd: nil,
+                            opacity: 1.0, opacityEnd: nil,
+                            targetRect: nil, cornerRadiusFraction: nil, cropRect: nil
                         )
                     }
-                    let ptInstr = AVVideoCompositionInstruction(configuration: .init(
-                        layerInstructions: ptLayerInsts,
-                        timeRange: CMTimeRange(start: .zero, duration: composition.duration)
-                    ))
-                    let ptConfig = AVVideoComposition.Configuration(
-                        frameDuration: CMTime(value: 1, timescale: 30),
-                        instructions: [ptInstr],
+                    let ptInstr = CompositorInstruction(
+                        timeRange: CMTimeRange(start: .zero, duration: composition.duration),
+                        layers: ptLayers,
                         renderSize: renderSize
                     )
-                    baseVC = AVVideoComposition(configuration: ptConfig)
+                    let ptVC = AVMutableVideoComposition()
+                    ptVC.frameDuration = CMTime(value: 1, timescale: 30)
+                    ptVC.renderSize = renderSize
+                    ptVC.instructions = [ptInstr]
+                    ptVC.customVideoCompositorClass = VideoCompositor.self
+                    baseVC = ptVC
                     diag.append("videoComposition: created pass-through for captions")
                 }
 
@@ -237,15 +245,15 @@ final class ExportService: Sendable {
                 let animTool = AVVideoCompositionCoreAnimationTool(configuration: animToolConfig)
                 captionLog("[ReeLabs Caption] animTool created: \(type(of: animTool))")
 
-                // animationTool MUST be part of the Configuration initializer.
-                // Setting it as a property on AVMutableVideoComposition silently fails.
-                let captionVCConfig = AVVideoComposition.Configuration(
-                    animationTool: animTool,
-                    frameDuration: baseVC.frameDuration,
-                    instructions: baseVC.instructions,
-                    renderSize: baseVC.renderSize
-                )
-                let finalVC = AVVideoComposition(configuration: captionVCConfig)
+                // Build caption video composition preserving custom compositor.
+                // animationTool + customVideoCompositorClass must coexist.
+                let captionVC = AVMutableVideoComposition()
+                captionVC.animationTool = animTool
+                captionVC.frameDuration = baseVC.frameDuration
+                captionVC.instructions = baseVC.instructions
+                captionVC.renderSize = baseVC.renderSize
+                captionVC.customVideoCompositorClass = baseVC.customVideoCompositorClass
+                let finalVC: AVVideoComposition = captionVC
                 session.videoComposition = finalVC
                 didApplyCaptions = true
 

@@ -100,10 +100,13 @@ final class CompositionBuilder: Sendable {
 
         struct SegmentLayout {
             let trackIndex: Int
+            let trackID: CMPersistentTrackID
             let compositionStart: CMTime
             let duration: CMTime
             let transitionDur: CMTime   // incoming crossfade duration
             let transform: CGAffineTransform
+            let preferredTransform: CGAffineTransform
+            let naturalSize: CGSize
             let keyframeTransforms: [KeyframeLayout]?
             let volume: Float
         }
@@ -151,6 +154,8 @@ final class CompositionBuilder: Sendable {
 
             // Insert video
             var transform = CGAffineTransform.identity
+            var segPreferredTransform = CGAffineTransform.identity
+            var segNaturalSize = CGSize(width: 1920, height: 1080)
             var keyframeTransforms: [KeyframeLayout]? = nil
             if let srcVT = srcVideoTracks.first {
                 try vTrack.insertTimeRange(timeRange, of: srcVT, at: insertionTime)
@@ -162,6 +167,8 @@ final class CompositionBuilder: Sendable {
                 }
                 let naturalSize = try await srcVT.load(.naturalSize)
                 let preferredTransform = try await srcVT.load(.preferredTransform)
+                segNaturalSize = naturalSize
+                segPreferredTransform = preferredTransform
                 transform = buildAffineTransform(
                     segment: segment, naturalSize: naturalSize,
                     preferredTransform: preferredTransform, outputSize: renderSize
@@ -198,10 +205,13 @@ final class CompositionBuilder: Sendable {
 
             layouts.append(SegmentLayout(
                 trackIndex: trackIdx,
+                trackID: vTrack.trackID,
                 compositionStart: insertionTime,
                 duration: outputDuration,
                 transitionDur: transitionDur,
                 transform: transform,
+                preferredTransform: segPreferredTransform,
+                naturalSize: segNaturalSize,
                 keyframeTransforms: keyframeTransforms,
                 volume: Float(segment.volume ?? 1.0)
             ))
@@ -209,123 +219,41 @@ final class CompositionBuilder: Sendable {
             insertionTime = CMTimeAdd(insertionTime, outputDuration)
         }
 
-        // --- Pass 2: Build video composition instructions and audio mix ---
+        // --- Pass 2: Build audio mix ---
 
-        // Helper: build a layer instruction config with static or keyframed transforms
-        func buildLayerConfig(
-            track: AVMutableCompositionTrack,
-            layout: SegmentLayout
-        ) -> AVVideoCompositionLayerInstruction.Configuration {
-            var config = AVVideoCompositionLayerInstruction.Configuration(assetTrack: track)
-            if let kfs = layout.keyframeTransforms, kfs.count >= 2 {
-                for i in 0..<(kfs.count - 1) {
-                    let startTime = CMTimeAdd(
-                        layout.compositionStart,
-                        CMTime(seconds: kfs[i].relativeTime, preferredTimescale: 600)
-                    )
-                    let endTime = CMTimeAdd(
-                        layout.compositionStart,
-                        CMTime(seconds: kfs[i + 1].relativeTime, preferredTimescale: 600)
-                    )
-                    config.addTransformRamp(.init(
-                        timeRange: CMTimeRange(start: startTime, duration: CMTimeSubtract(endTime, startTime)),
-                        start: kfs[i].transform,
-                        end: kfs[i + 1].transform
-                    ))
-                }
-            } else {
-                config.setTransform(layout.transform, at: layout.compositionStart)
-            }
-            return config
-        }
-
-        var instructionConfigs: [AVVideoCompositionInstruction.Configuration] = []
         var audioMixParams: [AVMutableAudioMixInputParameters] = []
-
-        // One audio mix params instance per track (Apple requires this)
         var audioParamsA: AVMutableAudioMixInputParameters?
         var audioParamsB: AVMutableAudioMixInputParameters?
-        if let audioTrackA { audioParamsA = AVMutableAudioMixInputParameters(track: audioTrackA) }
-        if let audioTrackB { audioParamsB = AVMutableAudioMixInputParameters(track: audioTrackB) }
-        var needsAudioA = false
-        var needsAudioB = false
+        if let audioTrackA {
+            audioParamsA = AVMutableAudioMixInputParameters(track: audioTrackA)
+            audioParamsA?.setVolume(1.0, at: .zero)
+        }
+        if let audioTrackB {
+            audioParamsB = AVMutableAudioMixInputParameters(track: audioTrackB)
+            audioParamsB?.setVolume(1.0, at: .zero)
+        }
 
         for (index, layout) in layouts.enumerated() {
             let segStart = layout.compositionStart
-            let segEnd = CMTimeAdd(segStart, layout.duration)
             let hasIncoming = CMTimeGetSeconds(layout.transitionDur) > 0 && index > 0
-            let vTrack = videoTracks[layout.trackIndex]
 
-            // How much the NEXT segment's transition eats into this segment's end
-            let outgoingDur: CMTime
-            if index + 1 < layouts.count {
-                outgoingDur = layouts[index + 1].transitionDur
-            } else {
-                outgoingDur = .zero
-            }
-
-            // --- Crossfade transition instruction (overlap region) ---
+            // Audio crossfade
             if hasIncoming {
                 let prev = layouts[index - 1]
-                let prevTrack = videoTracks[prev.trackIndex]
                 let tRange = CMTimeRange(start: segStart, duration: layout.transitionDur)
-
-                // Outgoing track: fade out
-                var outConfig = buildLayerConfig(track: prevTrack, layout: prev)
-                outConfig.addOpacityRamp(.init(timeRange: tRange, start: 1.0, end: 0.0))
-
-                // Incoming track: fade in
-                var inConfig = buildLayerConfig(track: vTrack, layout: layout)
-                inConfig.addOpacityRamp(.init(timeRange: tRange, start: 0.0, end: 1.0))
-
-                instructionConfigs.append(.init(
-                    layerInstructions: [
-                        AVVideoCompositionLayerInstruction(configuration: outConfig),
-                        AVVideoCompositionLayerInstruction(configuration: inConfig)
-                    ],
-                    timeRange: tRange
-                ))
-
-                // Audio crossfade
                 let prevAP = prev.trackIndex == 0 ? audioParamsA : audioParamsB
                 let currAP = layout.trackIndex == 0 ? audioParamsA : audioParamsB
                 prevAP?.setVolumeRamp(fromStartVolume: prev.volume, toEndVolume: 0, timeRange: tRange)
                 currAP?.setVolumeRamp(fromStartVolume: 0, toEndVolume: layout.volume, timeRange: tRange)
-                if prev.trackIndex == 0 { needsAudioA = true } else { needsAudioB = true }
-                if layout.trackIndex == 0 { needsAudioA = true } else { needsAudioB = true }
-            }
-
-            // --- Pass-through instruction (non-overlap region) ---
-            let passStart = hasIncoming ? CMTimeAdd(segStart, layout.transitionDur) : segStart
-            let passEnd = CMTimeSubtract(segEnd, outgoingDur)
-            let passDuration = CMTimeSubtract(passEnd, passStart)
-
-            if CMTimeGetSeconds(passDuration) > 0 {
-                let layerInstruction: AVVideoCompositionLayerInstruction
-                if layout.keyframeTransforms != nil && (layout.keyframeTransforms?.count ?? 0) >= 2 {
-                    let config = buildLayerConfig(track: vTrack, layout: layout)
-                    layerInstruction = AVVideoCompositionLayerInstruction(configuration: config)
-                } else {
-                    var config = AVVideoCompositionLayerInstruction.Configuration(assetTrack: vTrack)
-                    config.setTransform(layout.transform, at: passStart)
-                    layerInstruction = AVVideoCompositionLayerInstruction(configuration: config)
-                }
-                instructionConfigs.append(.init(
-                    layerInstructions: [layerInstruction],
-                    timeRange: CMTimeRange(start: passStart, duration: passDuration)
-                ))
             }
 
             // Custom volume outside of crossfade regions
+            let passStart = hasIncoming ? CMTimeAdd(segStart, layout.transitionDur) : segStart
             if layout.volume != 1.0 {
                 let ap = layout.trackIndex == 0 ? audioParamsA : audioParamsB
                 ap?.setVolume(layout.volume, at: passStart)
-                if layout.trackIndex == 0 { needsAudioA = true } else { needsAudioB = true }
             }
         }
-
-        if needsAudioA, let audioParamsA { audioMixParams.append(audioParamsA) }
-        if needsAudioB, let audioParamsB { audioMixParams.append(audioParamsB) }
 
         // --- Background music track ---
         if let audio = spec.audio, let musicPath = audio.musicPath {
@@ -350,11 +278,11 @@ final class CompositionBuilder: Sendable {
             audioMixParams.append(musicParams)
         }
 
-        // --- Pass 3: Overlay tracks ---
+        // --- Pass 3: Insert overlay tracks onto composition ---
+
+        var overlayLayouts: [OverlayLayout] = []
 
         if let overlays = spec.overlays, !overlays.isEmpty {
-            // Sort by ascending zIndex so higher zIndex overlays are processed last
-            // and prepended (= rendered on top)
             let sorted = overlays.sorted { ($0.zIndex ?? 0) < ($1.zIndex ?? 0) }
 
             for overlay in sorted {
@@ -371,7 +299,6 @@ final class CompositionBuilder: Sendable {
                 let sourceOffset = CMTime(seconds: overlay.sourceStart ?? 0, preferredTimescale: 600)
                 let sourceRange = CMTimeRange(start: sourceOffset, duration: overlayDuration)
 
-                // 3a. Insert overlay video track
                 if let srcVT = srcVideoTracks.first {
                     guard let ovTrack = composition.addMutableTrack(
                         withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
@@ -382,61 +309,34 @@ final class CompositionBuilder: Sendable {
 
                     let naturalSize = try await srcVT.load(.naturalSize)
                     let preferredTransform = try await srcVT.load(.preferredTransform)
-                    let ovTransform = buildOverlayTransform(
-                        overlay: overlay,
-                        naturalSize: naturalSize,
-                        preferredTransform: preferredTransform,
-                        renderSize: renderSize
+
+                    // Target rectangle in pixels (top-left origin)
+                    let targetRect = CGRect(
+                        x: overlay.x * renderSize.width,
+                        y: overlay.y * renderSize.height,
+                        width: overlay.width * renderSize.width,
+                        height: overlay.height * renderSize.height
                     )
-                    let ovOpacity = Float(overlay.opacity ?? 1.0)
 
-                    // 3c. Integrate overlay into existing instruction configs
-                    // For each instruction whose timeRange overlaps the overlay active period,
-                    // prepend a layer instruction for the overlay track.
-                    if instructionConfigs.isEmpty {
-                        // Edge case: no instructions yet (single segment, no transforms).
-                        // Create a full-duration pass-through for each main video track.
-                        let totalTime = insertionTime
-                        let fullRange = CMTimeRange(start: .zero, duration: totalTime)
-
-                        let layerInstructions = videoTracks.map { vt in
-                            AVVideoCompositionLayerInstruction(
-                                configuration: .init(assetTrack: vt)
-                            )
-                        }
-                        instructionConfigs.append(.init(
-                            layerInstructions: layerInstructions,
-                            timeRange: fullRange
-                        ))
+                    // Convert crop spec to CGRect (0-1 fractions)
+                    let cropRect: CGRect? = overlay.crop.map {
+                        CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
                     }
 
-                    for (i, instrConfig) in instructionConfigs.enumerated() {
-                        let instrRange = instrConfig.timeRange
-                        // Check overlap
-                        let overlapStart = max(CMTimeGetSeconds(instrRange.start), CMTimeGetSeconds(overlayStart))
-                        let overlapEnd = min(
-                            CMTimeGetSeconds(CMTimeAdd(instrRange.start, instrRange.duration)),
-                            CMTimeGetSeconds(overlayEnd)
-                        )
-                        guard overlapEnd > overlapStart else { continue }
-
-                        var ovLayerConfig = AVVideoCompositionLayerInstruction.Configuration(assetTrack: ovTrack)
-                        ovLayerConfig.setTransform(ovTransform, at: instrRange.start)
-                        ovLayerConfig.setOpacity(0.0, at: instrRange.start)
-                        ovLayerConfig.setOpacity(ovOpacity, at: overlayStart)
-                        // Explicit cleanup: hide overlay after its end time
-                        ovLayerConfig.setOpacity(0.0, at: overlayEnd)
-
-                        var updatedConfig = instrConfig
-                        updatedConfig.layerInstructions.insert(
-                            AVVideoCompositionLayerInstruction(configuration: ovLayerConfig),
-                            at: 0
-                        )
-                        instructionConfigs[i] = updatedConfig
-                    }
+                    overlayLayouts.append(OverlayLayout(
+                        trackID: ovTrack.trackID,
+                        overlayStart: overlayStart,
+                        overlayEnd: overlayEnd,
+                        preferredTransform: preferredTransform,
+                        naturalSize: naturalSize,
+                        targetRect: targetRect,
+                        cornerRadiusFraction: overlay.cornerRadius,
+                        cropRect: cropRect,
+                        opacity: Float(overlay.opacity ?? 1.0)
+                    ))
                 }
 
-                // 3a continued: Insert overlay audio track if volume > 0
+                // Insert overlay audio if volume > 0
                 let overlayAudioVolume = Float(overlay.audio ?? 0)
                 if overlayAudioVolume > 0, let srcAT = srcAudioTracks.first {
                     guard let ovAudioTrack = composition.addMutableTrack(
@@ -454,23 +354,184 @@ final class CompositionBuilder: Sendable {
         }
 
         // Remove empty tracks to prevent AVFoundation export error -12123.
-        // Pre-allocated B-tracks remain empty when fewer than 2 segments use them.
         for track in composition.tracks where track.segments.isEmpty {
             composition.removeTrack(track)
         }
 
-        // Build video composition via Configuration API
-        var videoComposition: AVVideoComposition? = nil
-        if !instructionConfigs.isEmpty {
-            let instructions = instructionConfigs.map {
-                AVVideoCompositionInstruction(configuration: $0)
+        // --- Always explicitly parameterize main audio tracks ---
+        // AVFoundation drops audio unpredictably when an audioMix exists
+        // (from overlay audio, music, crossfade) but some tracks lack
+        // explicit parameters. By always adding params for main tracks,
+        // every audio track in the composition is accounted for.
+        let remainingTrackIDs = Set(composition.tracks.map { $0.trackID })
+
+        // Apply overlay ducking: reduce main audio volume during overlay
+        if let overlays = spec.overlays {
+            for overlay in overlays {
+                guard let duckVolume = overlay.mainAudioVolume else { continue }
+                let overlayStart = CMTime(seconds: overlay.start, preferredTimescale: 600)
+                let overlayEnd = CMTime(seconds: overlay.end, preferredTimescale: 600)
+                let vol = Float(duckVolume)
+                if let audioParamsA, let audioTrackA, remainingTrackIDs.contains(audioTrackA.trackID) {
+                    audioParamsA.setVolume(vol, at: overlayStart)
+                    audioParamsA.setVolume(1.0, at: overlayEnd)
+                }
+                if let audioParamsB, let audioTrackB, remainingTrackIDs.contains(audioTrackB.trackID) {
+                    audioParamsB.setVolume(vol, at: overlayStart)
+                    audioParamsB.setVolume(1.0, at: overlayEnd)
+                }
             }
-            let config = AVVideoComposition.Configuration(
-                frameDuration: CMTime(value: 1, timescale: CMTimeScale(fps)),
-                instructions: instructions,
-                renderSize: renderSize
-            )
-            videoComposition = AVVideoComposition(configuration: config)
+        }
+
+        if let audioParamsA, let audioTrackA, remainingTrackIDs.contains(audioTrackA.trackID) {
+            audioMixParams.append(audioParamsA)
+        }
+        if let audioParamsB, let audioTrackB, remainingTrackIDs.contains(audioTrackB.trackID) {
+            audioMixParams.append(audioParamsB)
+        }
+
+        // --- Pass 4: Build unified CompositorInstructions ---
+
+        var instructions: [CompositorInstruction] = []
+
+        for (index, layout) in layouts.enumerated() {
+            let segStart = layout.compositionStart
+            let segEnd = CMTimeAdd(segStart, layout.duration)
+            let hasIncoming = CMTimeGetSeconds(layout.transitionDur) > 0 && index > 0
+
+            let outgoingDur: CMTime
+            if index + 1 < layouts.count {
+                outgoingDur = layouts[index + 1].transitionDur
+            } else {
+                outgoingDur = .zero
+            }
+
+            // --- Crossfade instruction (overlap region) ---
+            if hasIncoming {
+                let prev = layouts[index - 1]
+                let tRange = CMTimeRange(start: segStart, duration: layout.transitionDur)
+                let subRanges = splitRangeAtOverlayBoundaries(tRange, overlayLayouts: overlayLayouts)
+                let fullDur = CMTimeGetSeconds(tRange.duration)
+
+                for subRange in subRanges {
+                    let relStart = fullDur > 0 ? Float((CMTimeGetSeconds(subRange.start) - CMTimeGetSeconds(tRange.start)) / fullDur) : 0
+                    let relEnd = fullDur > 0 ? relStart + Float(CMTimeGetSeconds(subRange.duration) / fullDur) : 1
+
+                    var layers: [LayerInfo] = [
+                        // Outgoing layer (fade out)
+                        LayerInfo(
+                            trackID: prev.trackID,
+                            preferredTransform: prev.preferredTransform,
+                            naturalSize: prev.naturalSize,
+                            transform: prev.transform,
+                            transformEnd: nil,
+                            opacity: 1.0 - relStart, opacityEnd: 1.0 - relEnd,
+                            targetRect: nil, cornerRadiusFraction: nil, cropRect: nil
+                        ),
+                        // Incoming layer (fade in)
+                        LayerInfo(
+                            trackID: layout.trackID,
+                            preferredTransform: layout.preferredTransform,
+                            naturalSize: layout.naturalSize,
+                            transform: layout.transform,
+                            transformEnd: nil,
+                            opacity: relStart, opacityEnd: relEnd,
+                            targetRect: nil, cornerRadiusFraction: nil, cropRect: nil
+                        ),
+                    ]
+
+                    appendOverlayLayers(to: &layers, overlayLayouts: overlayLayouts, timeRange: subRange)
+
+                    instructions.append(CompositorInstruction(
+                        timeRange: subRange, layers: layers, renderSize: renderSize
+                    ))
+                }
+            }
+
+            // --- Pass-through instruction (non-overlap region) ---
+            let passStart = hasIncoming ? CMTimeAdd(segStart, layout.transitionDur) : segStart
+            let passEnd = CMTimeSubtract(segEnd, outgoingDur)
+            let passDuration = CMTimeSubtract(passEnd, passStart)
+
+            if CMTimeGetSeconds(passDuration) > 0 {
+                // For keyframed segments, split into per-interval instructions
+                if let kfs = layout.keyframeTransforms, kfs.count >= 2 {
+                    for i in 0..<(kfs.count - 1) {
+                        let kfStart = CMTimeAdd(
+                            layout.compositionStart,
+                            CMTime(seconds: kfs[i].relativeTime, preferredTimescale: 600)
+                        )
+                        let kfEnd = CMTimeAdd(
+                            layout.compositionStart,
+                            CMTime(seconds: kfs[i + 1].relativeTime, preferredTimescale: 600)
+                        )
+                        // Clamp to pass-through bounds
+                        let clampedStart = CMTimeMaximum(kfStart, passStart)
+                        let clampedEnd = CMTimeMinimum(kfEnd, passEnd)
+                        let clampedDur = CMTimeSubtract(clampedEnd, clampedStart)
+                        guard CMTimeGetSeconds(clampedDur) > 0 else { continue }
+
+                        let kfRange = CMTimeRange(start: clampedStart, duration: clampedDur)
+                        let kfSubRanges = splitRangeAtOverlayBoundaries(kfRange, overlayLayouts: overlayLayouts)
+                        let kfFullDur = CMTimeGetSeconds(clampedDur)
+
+                        for kfSubRange in kfSubRanges {
+                            let relStart = kfFullDur > 0 ? CGFloat((CMTimeGetSeconds(kfSubRange.start) - CMTimeGetSeconds(clampedStart)) / kfFullDur) : 0
+                            let relEnd = kfFullDur > 0 ? relStart + CGFloat(CMTimeGetSeconds(kfSubRange.duration) / kfFullDur) : 1
+
+                            let txStart = lerpTransform(kfs[i].transform, kfs[i + 1].transform, relStart)
+                            let txEnd = lerpTransform(kfs[i].transform, kfs[i + 1].transform, relEnd)
+
+                            var layers: [LayerInfo] = [
+                                LayerInfo(
+                                    trackID: layout.trackID,
+                                    preferredTransform: layout.preferredTransform,
+                                    naturalSize: layout.naturalSize,
+                                    transform: txStart,
+                                    transformEnd: txEnd,
+                                    opacity: 1.0, opacityEnd: nil,
+                                    targetRect: nil, cornerRadiusFraction: nil, cropRect: nil
+                                ),
+                            ]
+                            appendOverlayLayers(to: &layers, overlayLayouts: overlayLayouts, timeRange: kfSubRange)
+                            instructions.append(CompositorInstruction(
+                                timeRange: kfSubRange, layers: layers, renderSize: renderSize
+                            ))
+                        }
+                    }
+                } else {
+                    let passRange = CMTimeRange(start: passStart, duration: passDuration)
+                    let subRanges = splitRangeAtOverlayBoundaries(passRange, overlayLayouts: overlayLayouts)
+                    for subRange in subRanges {
+                        var layers: [LayerInfo] = [
+                            LayerInfo(
+                                trackID: layout.trackID,
+                                preferredTransform: layout.preferredTransform,
+                                naturalSize: layout.naturalSize,
+                                transform: layout.transform,
+                                transformEnd: nil,
+                                opacity: 1.0, opacityEnd: nil,
+                                targetRect: nil, cornerRadiusFraction: nil, cropRect: nil
+                            ),
+                        ]
+                        appendOverlayLayers(to: &layers, overlayLayouts: overlayLayouts, timeRange: subRange)
+                        instructions.append(CompositorInstruction(
+                            timeRange: subRange, layers: layers, renderSize: renderSize
+                        ))
+                    }
+                }
+            }
+        }
+
+        // Build video composition with custom compositor
+        var videoComposition: AVVideoComposition? = nil
+        if !instructions.isEmpty {
+            let mutableVC = AVMutableVideoComposition()
+            mutableVC.frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
+            mutableVC.renderSize = renderSize
+            mutableVC.instructions = instructions
+            mutableVC.customVideoCompositorClass = VideoCompositor.self
+            videoComposition = mutableVC
         }
 
         // Build audio mix
@@ -491,6 +552,100 @@ final class CompositionBuilder: Sendable {
             totalDuration: totalDuration,
             fps: fps
         )
+    }
+
+    /// Append overlay LayerInfos to a layers array for any overlays that overlap the given time range.
+    private func appendOverlayLayers(
+        to layers: inout [LayerInfo],
+        overlayLayouts: [OverlayLayout],
+        timeRange: CMTimeRange
+    ) {
+        let spanStart = CMTimeGetSeconds(timeRange.start)
+        let spanEnd = CMTimeGetSeconds(CMTimeAdd(timeRange.start, timeRange.duration))
+
+        for ov in overlayLayouts {
+            let ovStart = CMTimeGetSeconds(ov.overlayStart)
+            let ovEnd = CMTimeGetSeconds(ov.overlayEnd)
+            guard max(spanStart, ovStart) < min(spanEnd, ovEnd) else { continue }
+
+            layers.append(LayerInfo(
+                trackID: ov.trackID,
+                preferredTransform: ov.preferredTransform,
+                naturalSize: ov.naturalSize,
+                transform: .identity,
+                transformEnd: nil,
+                opacity: ov.opacity,
+                opacityEnd: nil,
+                targetRect: ov.targetRect,
+                cornerRadiusFraction: ov.cornerRadiusFraction,
+                cropRect: ov.cropRect
+            ))
+        }
+    }
+
+    /// Split a time range at overlay start/end boundaries so each sub-range
+    /// only includes overlays that have media in that span. Prevents AVFoundation
+    /// from holding the last overlay frame beyond its end time.
+    private func splitRangeAtOverlayBoundaries(
+        _ range: CMTimeRange,
+        overlayLayouts: [OverlayLayout]
+    ) -> [CMTimeRange] {
+        guard !overlayLayouts.isEmpty else { return [range] }
+
+        let rangeStart = CMTimeGetSeconds(range.start)
+        let rangeEnd = rangeStart + CMTimeGetSeconds(range.duration)
+
+        var splitPoints: [Double] = [rangeStart, rangeEnd]
+
+        for ov in overlayLayouts {
+            let ovStart = CMTimeGetSeconds(ov.overlayStart)
+            let ovEnd = CMTimeGetSeconds(ov.overlayEnd)
+            if ovStart > rangeStart && ovStart < rangeEnd {
+                splitPoints.append(ovStart)
+            }
+            if ovEnd > rangeStart && ovEnd < rangeEnd {
+                splitPoints.append(ovEnd)
+            }
+        }
+
+        let sorted = Array(Set(splitPoints)).sorted()
+        var subRanges: [CMTimeRange] = []
+        for i in 0..<(sorted.count - 1) {
+            let dur = sorted[i + 1] - sorted[i]
+            if dur > 0 {
+                subRanges.append(CMTimeRange(
+                    start: CMTime(seconds: sorted[i], preferredTimescale: 600),
+                    duration: CMTime(seconds: dur, preferredTimescale: 600)
+                ))
+            }
+        }
+
+        return subRanges
+    }
+
+    private func lerpTransform(
+        _ a: CGAffineTransform, _ b: CGAffineTransform, _ t: CGFloat
+    ) -> CGAffineTransform {
+        CGAffineTransform(
+            a: a.a + (b.a - a.a) * t,
+            b: a.b + (b.b - a.b) * t,
+            c: a.c + (b.c - a.c) * t,
+            d: a.d + (b.d - a.d) * t,
+            tx: a.tx + (b.tx - a.tx) * t,
+            ty: a.ty + (b.ty - a.ty) * t
+        )
+    }
+
+    private struct OverlayLayout {
+        let trackID: CMPersistentTrackID
+        let overlayStart: CMTime
+        let overlayEnd: CMTime
+        let preferredTransform: CGAffineTransform
+        let naturalSize: CGSize
+        let targetRect: CGRect
+        let cornerRadiusFraction: Double?
+        let cropRect: CGRect?
+        let opacity: Float
     }
 
     private func buildAffineTransform(
@@ -547,40 +702,6 @@ final class CompositionBuilder: Sendable {
         )
     }
 
-    /// Build a transform that cover-fills the overlay source into a sub-rectangle of the render.
-    /// Coordinates are 0.0-1.0 fractions of renderSize. Top-left origin.
-    private func buildOverlayTransform(
-        overlay: Overlay,
-        naturalSize: CGSize,
-        preferredTransform: CGAffineTransform,
-        renderSize: CGSize
-    ) -> CGAffineTransform {
-        let transformedSize = naturalSize.applying(preferredTransform)
-        let actualWidth = abs(transformedSize.width)
-        let actualHeight = abs(transformedSize.height)
-
-        // Target rectangle in pixels
-        let targetX = overlay.x * renderSize.width
-        let targetY = overlay.y * renderSize.height
-        let targetW = overlay.width * renderSize.width
-        let targetH = overlay.height * renderSize.height
-
-        // Cover-fill scale to fit within target rect
-        let coverScale = max(targetW / actualWidth, targetH / actualHeight)
-
-        let scaledWidth = actualWidth * coverScale
-        let scaledHeight = actualHeight * coverScale
-
-        // Center within target rect
-        let centerX = targetX + (targetW - scaledWidth) / 2
-        let centerY = targetY + (targetH - scaledHeight) / 2
-
-        var transform = preferredTransform
-        transform = transform.concatenating(CGAffineTransform(scaleX: coverScale, y: coverScale))
-        transform = transform.concatenating(CGAffineTransform(translationX: centerX, y: centerY))
-
-        return transform
-    }
 }
 
 enum CompositionError: Error, LocalizedError {
