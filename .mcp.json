@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "reelabs": {
+      "type": "stdio",
+      "command": "/Users/williambransford/Desktop/reelabs-mcp2/.build/release/ReelabsMCP",
+      "args": [],
+      "cwd": "/Users/williambransford/Desktop/reelabs-mcp2",
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "/Users/williambransford/Desktop/reelabs-mcp2/service-account.json"
+      }
+    }
+  }
+}
