@@ -17,6 +17,7 @@ struct RenderSpec: Codable, Sendable {
     struct Source: Codable, Sendable {
         let id: String
         let path: String
+        let transcriptId: Int?
     }
 }
 

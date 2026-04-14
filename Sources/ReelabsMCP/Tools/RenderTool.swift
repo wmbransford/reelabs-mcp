@@ -45,14 +45,34 @@ enum RenderTool {
             let builder = CompositionBuilder()
             let exportService = ExportService()
 
-            // Fail loudly if captions requested without transcriptId
-            if spec.captions != nil && spec.captions?.transcriptId == nil {
-                return .init(content: [.text(text: "Caption error: transcriptId is required when captions are specified.", annotations: nil, _meta: nil)], isError: true)
+            // Determine caption mode: per-source, legacy single-transcript, or error
+            let hasPerSourceTranscripts = spec.sources.contains { $0.transcriptId != nil }
+            let hasLegacyTranscriptId = spec.captions?.transcriptId != nil
+
+            if spec.captions != nil && !hasPerSourceTranscripts && !hasLegacyTranscriptId {
+                return .init(content: [.text(text: "Caption error: transcriptId is required when captions are specified. Set it on each source or in captions.", annotations: nil, _meta: nil)], isError: true)
             }
 
-            // Resolve caption transcript — fail loudly if requested but missing
+            // Resolve caption transcript(s)
             var transcriptData: TranscriptData? = nil
-            if let captionConfig = spec.captions, let transcriptId = captionConfig.transcriptId {
+            if spec.captions != nil && hasPerSourceTranscripts {
+                // Per-source mode: load words for each source that has a transcriptId
+                var sourceTranscripts: [String: [TranscriptWord]] = [:]
+                for source in spec.sources {
+                    guard let tid = source.transcriptId else { continue }
+                    guard let transcript = try transcriptRepo.get(id: Int64(tid)) else {
+                        return .init(content: [.text(text: "Caption error: transcript_id \(tid) (source '\(source.id)') not found in database. Run reelabs_transcribe first.", annotations: nil, _meta: nil)], isError: true)
+                    }
+                    let words = try transcriptRepo.getWords(transcriptId: Int64(tid))
+                    if words.isEmpty {
+                        return .init(content: [.text(text: "Caption error: transcript \(tid) (source '\(source.id)') has 0 words in database. Re-run reelabs_transcribe.", annotations: nil, _meta: nil)], isError: true)
+                    }
+                    sourceTranscripts[source.id] = words
+                    _ = transcript // suppress unused warning
+                }
+                transcriptData = remapMultiSourceTranscript(sourceTranscripts: sourceTranscripts, segments: spec.segments)
+            } else if let captionConfig = spec.captions, let transcriptId = captionConfig.transcriptId {
+                // Legacy single-transcript mode
                 guard let transcript = try transcriptRepo.get(id: Int64(transcriptId)) else {
                     return .init(content: [.text(text: "Caption error: transcript_id \(transcriptId) not found in database. Run reelabs_transcribe first.", annotations: nil, _meta: nil)], isError: true)
                 }
@@ -91,8 +111,9 @@ enum RenderTool {
             try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
             // Remap transcript word timestamps from source time to composition time
+            // (Per-source mode already remaps during construction, so only remap in legacy mode)
             let preRemapWordCount = transcriptData?.words.count ?? 0
-            if let td = transcriptData {
+            if let td = transcriptData, !hasPerSourceTranscripts {
                 transcriptData = remapTranscript(td, segments: spec.segments)
             }
             let postRemapWordCount = transcriptData?.words.count ?? 0
@@ -249,6 +270,56 @@ private func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) ->
     return TranscriptData(
         words: remapped,
         fullText: data.fullText,
+        durationSeconds: compositionTime
+    )
+}
+
+/// Remap words from multiple source transcripts into a single composition-time TranscriptData.
+/// Each segment pulls words from the transcript belonging to its source.
+private func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], segments: [SegmentSpec]) -> TranscriptData {
+    var compositionTime = 0.0
+    var remapped: [TranscriptWord] = []
+    var fullTextParts: [String] = []
+
+    for (segIdx, seg) in segments.enumerated() {
+        let speed = seg.speed ?? 1.0
+        let segDuration = (seg.end - seg.start) / speed
+
+        guard let words = sourceTranscripts[seg.sourceId] else {
+            captionLog("[remapMultiSource] seg[\(segIdx)]: no transcript for source '\(seg.sourceId)', skipping")
+            compositionTime += segDuration
+            continue
+        }
+
+        var segWords: [String] = []
+        for word in words {
+            if word.startTime >= seg.start && word.startTime < seg.end {
+                let newStart = compositionTime + (word.startTime - seg.start) / speed
+                let clampedEnd = min(word.endTime, seg.end)
+                let newEnd = compositionTime + (clampedEnd - seg.start) / speed
+                if newEnd <= newStart { continue }
+                remapped.append(TranscriptWord(
+                    word: word.word,
+                    startTime: newStart,
+                    endTime: newEnd,
+                    confidence: word.confidence
+                ))
+                segWords.append(word.word)
+            }
+        }
+
+        captionLog("[remapMultiSource] seg[\(segIdx)] source='\(seg.sourceId)' \(seg.start)-\(seg.end) → comp=\(compositionTime): \(segWords.count) words")
+        if !segWords.isEmpty {
+            fullTextParts.append(segWords.joined(separator: " "))
+        }
+        compositionTime += segDuration
+    }
+
+    captionLog("[remapMultiSource] Total: \(remapped.count) words, compositionDuration=\(round(compositionTime * 1000) / 1000)s")
+
+    return TranscriptData(
+        words: remapped,
+        fullText: fullTextParts.joined(separator: " "),
         durationSeconds: compositionTime
     )
 }

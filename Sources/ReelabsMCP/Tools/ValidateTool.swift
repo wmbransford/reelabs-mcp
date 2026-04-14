@@ -162,11 +162,28 @@ enum ValidateTool {
                 }
             }
 
-            // Validate captions transcript
-            if let captions = spec.captions, let transcriptId = captions.transcriptId {
+            // Validate captions transcripts
+            let hasPerSourceTranscripts = spec.sources.contains { $0.transcriptId != nil }
+            if hasPerSourceTranscripts {
+                // Per-source mode: validate each source's transcriptId
+                for source in spec.sources {
+                    if let tid = source.transcriptId {
+                        if try transcriptRepo.get(id: Int64(tid)) == nil {
+                            issues.append("Source '\(source.id)': transcript \(tid) not found in database")
+                        }
+                    } else if spec.captions != nil {
+                        issues.append("Warning: source '\(source.id)' has no transcriptId — segments from this source won't have captions")
+                    }
+                }
+            } else if let captions = spec.captions, let transcriptId = captions.transcriptId {
+                // Legacy single-transcript mode
                 if try transcriptRepo.get(id: Int64(transcriptId)) == nil {
                     issues.append("Caption transcript not found: \(transcriptId)")
                 }
+            }
+
+            if spec.captions != nil && !hasPerSourceTranscripts && spec.captions?.transcriptId == nil {
+                issues.append("Captions requested but no transcriptId specified (set on sources or in captions)")
             }
 
             // Validate output path

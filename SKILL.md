@@ -83,7 +83,13 @@ Word-level timestamps are stored internally in the database and used automatical
 
 ## Fields
 
-**sources** (required) — array of `{id, path}`. Referenced by segments via `sourceId`.
+**sources** (required) — array of `{id, path, transcriptId?}`. Referenced by segments via `sourceId`.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `id` | string | yes | unique identifier, referenced by segments |
+| `path` | string | yes | absolute path to video file |
+| `transcriptId` | int | no | transcript for this source (enables multi-source captions) |
 
 **segments** (required) — ordered array. Multiple segments = multiple cuts joined together.
 
@@ -100,10 +106,16 @@ Word-level timestamps are stored internally in the database and used automatical
 
 **captions** (optional):
 
+Two ways to provide transcript IDs for captions:
+1. **Per-source** (recommended for multi-source): set `transcriptId` on each source in the `sources` array. The renderer pulls words from the correct transcript for each segment automatically.
+2. **Legacy single-transcript**: set `transcriptId` in the `captions` object. Works for single-source edits.
+
+If any source has `transcriptId`, per-source mode is used. Otherwise, `captions.transcriptId` is used.
+
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `preset` | string | — | "tiktok", "subtitle", "minimal", "bold_center" |
-| `transcriptId` | int | — | from `reelabs_transcribe` — MUST be valid or render errors |
+| `transcriptId` | int | — | legacy single-source mode — from `reelabs_transcribe` |
 | `fontFamily` | string | "Arial" | font family name, e.g. "Arial", "Helvetica" |
 | `fontSize` | double | 7.0 | percentage of video height |
 | `fontWeight` | string | "bold" | "ultralight", "thin", "light", "regular", "medium", "semibold", "bold", "heavy", "black" |
@@ -116,6 +128,23 @@ Word-level timestamps are stored internally in the database and used automatical
 | `punctuation` | bool | true | show punctuation in captions |
 
 Inline fields override preset values. Omitted fields fall back to the preset.
+
+Example — multi-source captions (each source has its own transcript):
+```json
+{
+  "sources": [
+    {"id": "A", "path": "/path/to/interview-q.mp4", "transcriptId": 1},
+    {"id": "B", "path": "/path/to/interview-a.mp4", "transcriptId": 2}
+  ],
+  "segments": [
+    {"sourceId": "A", "start": 0, "end": 8.5},
+    {"sourceId": "B", "start": 2.0, "end": 15.0},
+    {"sourceId": "A", "start": 12.0, "end": 20.0}
+  ],
+  "captions": {"preset": "tiktok"},
+  "outputPath": "/path/to/output.mp4"
+}
+```
 
 **audio** (optional) — background music mixing. Music is trimmed to composition length (no looping). If music is shorter than the video, it plays then silence.
 
