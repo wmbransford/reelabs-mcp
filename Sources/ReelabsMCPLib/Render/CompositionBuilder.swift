@@ -334,6 +334,8 @@ final class CompositionBuilder: Sendable {
                         cropRect: cropRect,
                         opacity: Float(overlay.opacity ?? 1.0)
                     ))
+
+                    captionLog("[Builder] Overlay track: id=\(ovTrack.trackID) sourceId=\(overlay.sourceId) natSize=\(Int(naturalSize.width))x\(Int(naturalSize.height)) target=\(Int(targetRect.width))x\(Int(targetRect.height))@(\(Int(targetRect.origin.x)),\(Int(targetRect.origin.y))) time=\(round(CMTimeGetSeconds(overlayStart)*1000)/1000)..\(round(CMTimeGetSeconds(overlayEnd)*1000)/1000) segments=\(ovTrack.segments?.count ?? 0)")
                 }
 
                 // Insert overlay audio if volume > 0
@@ -510,11 +512,14 @@ final class CompositionBuilder: Sendable {
         var videoComposition: AVVideoComposition? = nil
         if !instructions.isEmpty {
             let mutableVC = AVMutableVideoComposition()
-            mutableVC.frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
+            let frameDur = Self.preciseFrameDuration(fps: fps)
+            mutableVC.frameDuration = frameDur
             mutableVC.renderSize = renderSize
             mutableVC.instructions = instructions
             mutableVC.customVideoCompositorClass = VideoCompositor.self
             videoComposition = mutableVC
+
+            captionLog("[Builder] VideoComposition: fps=\(fps) frameDuration=\(frameDur.value)/\(frameDur.timescale) renderSize=\(Int(renderSize.width))x\(Int(renderSize.height)) instructions=\(instructions.count) overlays=\(overlayLayouts.count)")
         }
 
         // Build audio mix
@@ -575,31 +580,37 @@ final class CompositionBuilder: Sendable {
     ) -> [CMTimeRange] {
         guard !overlayLayouts.isEmpty else { return [range] }
 
-        let rangeStart = CMTimeGetSeconds(range.start)
-        let rangeEnd = rangeStart + CMTimeGetSeconds(range.duration)
+        let rangeStart = range.start
+        let rangeEnd = CMTimeAdd(range.start, range.duration)
 
-        var splitPoints: [Double] = [rangeStart, rangeEnd]
+        // Collect split points as CMTime to avoid Double precision loss
+        var splitPoints: [CMTime] = [rangeStart, rangeEnd]
 
         for ov in overlayLayouts {
-            let ovStart = CMTimeGetSeconds(ov.overlayStart)
-            let ovEnd = CMTimeGetSeconds(ov.overlayEnd)
-            if ovStart > rangeStart && ovStart < rangeEnd {
-                splitPoints.append(ovStart)
+            if CMTimeCompare(ov.overlayStart, rangeStart) > 0 &&
+               CMTimeCompare(ov.overlayStart, rangeEnd) < 0 {
+                splitPoints.append(ov.overlayStart)
             }
-            if ovEnd > rangeStart && ovEnd < rangeEnd {
-                splitPoints.append(ovEnd)
+            if CMTimeCompare(ov.overlayEnd, rangeStart) > 0 &&
+               CMTimeCompare(ov.overlayEnd, rangeEnd) < 0 {
+                splitPoints.append(ov.overlayEnd)
             }
         }
 
-        let sorted = Array(Set(splitPoints)).sorted()
+        // Sort and deduplicate
+        splitPoints.sort { CMTimeCompare($0, $1) < 0 }
+        var unique: [CMTime] = [splitPoints[0]]
+        for i in 1..<splitPoints.count {
+            if CMTimeCompare(splitPoints[i], unique.last!) != 0 {
+                unique.append(splitPoints[i])
+            }
+        }
+
         var subRanges: [CMTimeRange] = []
-        for i in 0..<(sorted.count - 1) {
-            let dur = sorted[i + 1] - sorted[i]
-            if dur > 0 {
-                subRanges.append(CMTimeRange(
-                    start: CMTime(seconds: sorted[i], preferredTimescale: 600),
-                    duration: CMTime(seconds: dur, preferredTimescale: 600)
-                ))
+        for i in 0..<(unique.count - 1) {
+            let dur = CMTimeSubtract(unique[i + 1], unique[i])
+            if CMTimeGetSeconds(dur) > 0 {
+                subRanges.append(CMTimeRange(start: unique[i], duration: dur))
             }
         }
 
@@ -683,6 +694,31 @@ final class CompositionBuilder: Sendable {
             preferredTransform: preferredTransform,
             outputSize: outputSize
         )
+    }
+
+    /// Compute a precise frame duration CMTime for the given fps.
+    /// Handles NTSC rates (23.976, 29.97, 59.94) with exact 1001/N timescales
+    /// instead of truncating to integer timescale.
+    static func preciseFrameDuration(fps: Double) -> CMTime {
+        // Common NTSC frame rates use 1001/N fractions
+        let ntscRates: [(fps: Double, value: CMTimeValue, timescale: CMTimeScale)] = [
+            (23.976, 1001, 24000),
+            (29.97,  1001, 30000),
+            (59.94,  1001, 60000),
+        ]
+        for rate in ntscRates {
+            if abs(fps - rate.fps) < 0.05 {
+                return CMTime(value: rate.value, timescale: rate.timescale)
+            }
+        }
+        // For integer fps values, use simple 1/N
+        let rounded = Int32(fps.rounded())
+        if abs(fps - Double(rounded)) < 0.01 && rounded > 0 {
+            return CMTime(value: 1, timescale: CMTimeScale(rounded))
+        }
+        // Fallback: use 600 timescale for arbitrary fps
+        let frameDurationSeconds = 1.0 / fps
+        return CMTime(seconds: frameDurationSeconds, preferredTimescale: 600)
     }
 
 }

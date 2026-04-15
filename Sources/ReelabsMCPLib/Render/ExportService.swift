@@ -397,7 +397,7 @@ final class ExportService: Sendable {
         // Match frame rate from pass 1 output
         let nominalFPS = try await srcVideoTrack.load(.nominalFrameRate)
         let fps = nominalFPS > 0 ? nominalFPS : 30.0
-        pass2VC.frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
+        pass2VC.frameDuration = CompositionBuilder.preciseFrameDuration(fps: Double(fps))
         captionLog("[TwoPass] Frame rate: \(fps) fps")
 
         // Standard layer instruction (no custom compositor needed)
@@ -445,15 +445,60 @@ final class ExportService: Sendable {
     ) async throws {
         let codec = quality?.codec ?? .h264
 
+        // --- OVERLAY DIAGNOSTICS: log all video tracks and their format descriptions ---
+        let videoTracksInComp = composition.tracks(withMediaType: .video)
+        captionLog("[ReaderWriter] Video tracks in composition: \(videoTracksInComp.count)")
+        for (i, track) in videoTracksInComp.enumerated() {
+            let segs = track.segments ?? []
+            let segDescs = segs.enumerated().map { (j, seg) -> String in
+                let ts = CMTimeGetSeconds(seg.timeMapping.target.start)
+                let td = CMTimeGetSeconds(seg.timeMapping.target.duration)
+                let ss = CMTimeGetSeconds(seg.timeMapping.source.start)
+                let sd = CMTimeGetSeconds(seg.timeMapping.source.duration)
+                return "seg[\(j)] target=\(round(ts*1000)/1000)..\(round((ts+td)*1000)/1000) source=\(round(ss*1000)/1000)..\(round((ss+sd)*1000)/1000) empty=\(seg.isEmpty)"
+            }
+            captionLog("[ReaderWriter]   track[\(i)] id=\(track.trackID) segments=\(segs.count)")
+            for desc in segDescs {
+                captionLog("[ReaderWriter]     \(desc)")
+            }
+            // Log format descriptions
+            let fmtDescs = track.formatDescriptions as? [CMFormatDescription] ?? []
+            for (j, fmt) in fmtDescs.enumerated() {
+                let mediaType = CMFormatDescriptionGetMediaType(fmt)
+                let mediaSubType = CMFormatDescriptionGetMediaSubType(fmt)
+                let fourCC = String(format: "%c%c%c%c",
+                    (mediaSubType >> 24) & 0xFF,
+                    (mediaSubType >> 16) & 0xFF,
+                    (mediaSubType >> 8) & 0xFF,
+                    mediaSubType & 0xFF)
+                let dims = CMVideoFormatDescriptionGetDimensions(fmt)
+                captionLog("[ReaderWriter]     fmt[\(j)] type=\(mediaType) subType=\(fourCC) dims=\(dims.width)x\(dims.height)")
+            }
+        }
+
+        captionLog("[ReaderWriter] videoComposition: renderSize=\(Int(videoComposition.renderSize.width))x\(Int(videoComposition.renderSize.height)) frameDuration=\(videoComposition.frameDuration.value)/\(videoComposition.frameDuration.timescale) instructions=\(videoComposition.instructions.count)")
+        for (i, instr) in videoComposition.instructions.enumerated() {
+            let start = CMTimeGetSeconds(instr.timeRange.start)
+            let dur = CMTimeGetSeconds(instr.timeRange.duration)
+            if let ci = instr as? CompositorInstruction {
+                let layerDescs = ci.layers.map { l -> String in
+                    let overlayStr = l.targetRect != nil ? " overlay=\(Int(l.targetRect!.width))x\(Int(l.targetRect!.height))@(\(Int(l.targetRect!.origin.x)),\(Int(l.targetRect!.origin.y)))" : ""
+                    return "trackID=\(l.trackID)\(overlayStr)"
+                }
+                captionLog("[ReaderWriter]   instr[\(i)] t=\(round(start*1000)/1000)..\(round((start+dur)*1000)/1000) layers=[\(layerDescs.joined(separator: ", "))] reqIDs=\(ci.requiredSourceTrackIDs?.map { "\($0)" } ?? [])")
+            }
+        }
+
         // Configure reader
         let reader = try AVAssetReader(asset: composition)
 
         let videoOutput = AVAssetReaderVideoCompositionOutput(
-            videoTracks: composition.tracks(withMediaType: .video),
+            videoTracks: videoTracksInComp,
             videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         )
         videoOutput.videoComposition = videoComposition
         guard reader.canAdd(videoOutput) else {
+            captionLog("[ReaderWriter] ERROR: Cannot add video output to reader")
             throw ExportError.exportFailed("Two-pass pass 1: cannot add video output to reader")
         }
         reader.add(videoOutput)
@@ -521,11 +566,28 @@ final class ExportService: Sendable {
         }
 
         // Start reading/writing
+        captionLog("[ReaderWriter] Starting reader...")
         reader.startReading()
+        captionLog("[ReaderWriter] Reader status after start: \(reader.status.rawValue)")
+        if reader.status == .failed {
+            let err = reader.error as? NSError
+            let underlying = err?.userInfo[NSUnderlyingErrorKey] as? NSError
+            captionLog("[ReaderWriter] READER FAILED IMMEDIATELY: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) desc=\(err?.localizedDescription ?? "unknown")")
+            if let underlying {
+                captionLog("[ReaderWriter]   underlying: domain=\(underlying.domain) code=\(underlying.code) desc=\(underlying.localizedDescription)")
+            }
+            throw ExportError.exportFailed(
+                "Two-pass pass 1 reader failed on start: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) underlying=\(underlying?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
+            )
+        }
+
+        captionLog("[ReaderWriter] Starting writer...")
         writer.startWriting()
         writer.startSession(atSourceTime: .zero)
+        captionLog("[ReaderWriter] Writer status after start: \(writer.status.rawValue)")
 
         // Process video and audio concurrently
+        captionLog("[ReaderWriter] Beginning sample transfer...")
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 await self.transferSamples(from: videoOutput, to: videoInput)
@@ -537,12 +599,18 @@ final class ExportService: Sendable {
             }
             try await group.waitForAll()
         }
+        captionLog("[ReaderWriter] Sample transfer complete. Reader status=\(reader.status.rawValue) Writer status=\(writer.status.rawValue)")
 
         // Finalize
         if reader.status == .failed {
             let err = reader.error as? NSError
+            let underlying = err?.userInfo[NSUnderlyingErrorKey] as? NSError
+            captionLog("[ReaderWriter] READER FAILED: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) desc=\(err?.localizedDescription ?? "unknown")")
+            if let underlying {
+                captionLog("[ReaderWriter]   underlying: domain=\(underlying.domain) code=\(underlying.code) desc=\(underlying.localizedDescription)")
+            }
             throw ExportError.exportFailed(
-                "Two-pass pass 1 reader failed: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
+                "Two-pass pass 1 reader failed: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) underlying=\(underlying?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
             )
         }
 
@@ -550,12 +618,17 @@ final class ExportService: Sendable {
 
         if writer.status == .failed {
             let err = writer.error as? NSError
+            let underlying = err?.userInfo[NSUnderlyingErrorKey] as? NSError
+            captionLog("[ReaderWriter] WRITER FAILED: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) desc=\(err?.localizedDescription ?? "unknown")")
+            if let underlying {
+                captionLog("[ReaderWriter]   underlying: domain=\(underlying.domain) code=\(underlying.code) desc=\(underlying.localizedDescription)")
+            }
             throw ExportError.exportFailed(
-                "Two-pass pass 1 writer failed: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
+                "Two-pass pass 1 writer failed: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) underlying=\(underlying?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
             )
         }
 
-        captionLog("[TwoPass] Reader/writer export complete: \(writer.status.rawValue)")
+        captionLog("[ReaderWriter] Export complete: reader=\(reader.status.rawValue) writer=\(writer.status.rawValue)")
     }
 
     /// Transfer sample buffers from a reader output to a writer input.

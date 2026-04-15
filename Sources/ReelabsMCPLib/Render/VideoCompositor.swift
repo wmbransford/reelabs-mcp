@@ -2,6 +2,18 @@ import AVFoundation
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
+/// Thread-safe frame counter for log throttling.
+private final class FrameCounter: @unchecked Sendable {
+    private var _count = 0
+    private let lock = NSLock()
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        _count += 1
+        return _count
+    }
+}
+
 /// Custom AVVideoCompositing that composites all layers via CIImage (Metal-backed GPU).
 /// Handles main segment transforms, crossfade transitions, overlay positioning,
 /// corner radius masking, and source crop — all in one pipeline.
@@ -34,9 +46,14 @@ final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
         // No state to update
     }
 
+    // Throttle logging: only log every Nth frame per instruction to avoid flooding
+    private static let logEveryNthFrame = 30
+    private let frameCounter = FrameCounter()
+
     func startRequest(_ request: AVAsynchronousVideoCompositionRequest) {
         autoreleasepool {
             guard let instruction = request.videoCompositionInstruction as? CompositorInstruction else {
+                captionLog("[Compositor] ERROR: Unknown instruction type (not CompositorInstruction)")
                 request.finish(with: NSError(domain: "VideoCompositor", code: -1,
                     userInfo: [NSLocalizedDescriptionKey: "Unknown instruction type"]))
                 return
@@ -53,13 +70,31 @@ final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
             let elapsed = CMTimeGetSeconds(currentTime) - instrStart
             let progress = instrDur > 0 ? Float(min(max(elapsed / instrDur, 0), 1)) : 0
 
+            let frameNum = frameCounter.increment()
+            let shouldLog = frameNum <= 3 || frameNum % Self.logEveryNthFrame == 0
+
+            if shouldLog {
+                let trackIDs = instruction.layers.map { "\($0.trackID)\($0.targetRect != nil ? "(overlay)" : "")" }
+                let reqIDs = (instruction.requiredSourceTrackIDs ?? []).map { "\($0)" }
+                captionLog("[Compositor] frame#\(frameNum) time=\(round(CMTimeGetSeconds(currentTime) * 1000) / 1000)s layers=\(instruction.layers.count) trackIDs=[\(trackIDs.joined(separator: ","))] requiredIDs=[\(reqIDs.joined(separator: ","))] renderSize=\(Int(renderW))x\(Int(renderH))")
+            }
+
             // Start with a transparent canvas
             var canvas = CIImage(color: .black).cropped(to: CGRect(x: 0, y: 0, width: renderW, height: renderH))
 
             // Composite layers back-to-front
-            for layer in instruction.layers {
+            for (layerIdx, layer) in instruction.layers.enumerated() {
                 guard let sourceBuffer = request.sourceFrame(byTrackID: layer.trackID) else {
+                    if shouldLog {
+                        captionLog("[Compositor]   layer[\(layerIdx)] trackID=\(layer.trackID) sourceFrame=NIL (skipped) isOverlay=\(layer.targetRect != nil)")
+                    }
                     continue
+                }
+                if shouldLog {
+                    let bufW = CVPixelBufferGetWidth(sourceBuffer)
+                    let bufH = CVPixelBufferGetHeight(sourceBuffer)
+                    let fmt = CVPixelBufferGetPixelFormatType(sourceBuffer)
+                    captionLog("[Compositor]   layer[\(layerIdx)] trackID=\(layer.trackID) buffer=\(bufW)x\(bufH) fmt=\(fmt) isOverlay=\(layer.targetRect != nil)")
                 }
 
                 var image = CIImage(cvPixelBuffer: sourceBuffer)
@@ -191,6 +226,7 @@ final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
 
             // Render to output pixel buffer
             guard let outputBuffer = request.renderContext.newPixelBuffer() else {
+                captionLog("[Compositor] ERROR: Failed to create output pixel buffer at frame#\(frameNum)")
                 request.finish(with: NSError(domain: "VideoCompositor", code: -2,
                     userInfo: [NSLocalizedDescriptionKey: "Failed to create output pixel buffer"]))
                 return
@@ -202,7 +238,7 @@ final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
     }
 
     func cancelAllPendingVideoCompositionRequests() {
-        // No async work to cancel
+        captionLog("[Compositor] cancelAllPendingVideoCompositionRequests called")
     }
 
     // MARK: - Helpers
