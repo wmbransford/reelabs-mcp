@@ -84,6 +84,51 @@ final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
 
             // Composite layers back-to-front
             for (layerIdx, layer) in instruction.layers.enumerated() {
+                // --- Generated overlay (color/text) ---
+                if let genImage = layer.generatedImage {
+                    if shouldLog {
+                        captionLog("[Compositor]   layer[\(layerIdx)] GENERATED overlay \(Int(genImage.extent.width))x\(Int(genImage.extent.height))")
+                    }
+                    var image = genImage
+                    let targetRect = layer.targetRect!
+                    let targetW = targetRect.width
+                    let targetH = targetRect.height
+                    let ciTargetY = renderH - targetRect.origin.y - targetH
+
+                    // Corner radius (if not already baked in by TextOverlayRenderer)
+                    if let radiusFrac = layer.cornerRadiusFraction, radiusFrac > 0 {
+                        let cornerPx = radiusFrac * min(targetW, targetH) / 2
+                        let maskImage = roundedRectMask(
+                            size: CGSize(width: targetW, height: targetH),
+                            cornerRadius: cornerPx
+                        )
+                        let blendFilter = CIFilter.blendWithMask()
+                        blendFilter.inputImage = image
+                        blendFilter.backgroundImage = CIImage.clear
+                            .cropped(to: CGRect(x: 0, y: 0, width: targetW, height: targetH))
+                        blendFilter.maskImage = maskImage
+                        if let masked = blendFilter.outputImage {
+                            image = masked
+                        }
+                    }
+
+                    // Opacity
+                    let opacity = interpolate(start: layer.opacity, end: layer.opacityEnd, progress: progress)
+                    if opacity < 1.0 {
+                        image = image.applyingFilter("CIColorMatrix", parameters: [
+                            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(opacity))
+                        ])
+                    }
+
+                    // Translate to final position
+                    image = image.transformed(by: CGAffineTransform(
+                        translationX: targetRect.origin.x, y: ciTargetY))
+
+                    canvas = image.composited(over: canvas)
+                    continue
+                }
+
+                // --- Source-backed layer (video overlay or main segment) ---
                 guard let sourceBuffer = request.sourceFrame(byTrackID: layer.trackID) else {
                     if shouldLog {
                         captionLog("[Compositor]   layer[\(layerIdx)] trackID=\(layer.trackID) sourceFrame=NIL (skipped) isOverlay=\(layer.targetRect != nil)")
@@ -195,15 +240,19 @@ final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
                         tx = layer.transform
                     }
 
-                    // The builder's transforms are for AVFoundation's top-left coordinate system.
-                    // CIImage uses bottom-left. Conjugate with Y-flip.
-                    let flipY = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: renderH)
-
-                    // Reset image to raw pixels (undo preferredTransform applied above)
-                    // Actually, the transform from the builder already accounts for preferredTransform,
-                    // so we need to apply it to the raw source buffer.
+                    // The builder's transforms map from source pixels (top-left origin)
+                    // to render pixels (top-left origin). CIImage uses bottom-left origin.
+                    // Conjugate with Y-flips: source height for the first flip (bottom-left
+                    // → top-left), render height for the second (top-left → bottom-left).
+                    // Using renderH for both causes a vertical offset when source != render.
                     var rawImage = CIImage(cvPixelBuffer: sourceBuffer)
-                    let ciTransform = flipY.concatenating(tx).concatenating(flipY)
+                    let bufferH = rawImage.extent.height
+                    let flipSource = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: bufferH)
+                    let flipRender = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: renderH)
+                    let ciTransform = flipSource.concatenating(tx).concatenating(flipRender)
+                    if shouldLog {
+                        captionLog("[Compositor] FLIP-FIX-V2: bufferH=\(bufferH) renderH=\(renderH)")
+                    }
                     rawImage = rawImage.transformed(by: ciTransform)
 
                     // Clip to render bounds

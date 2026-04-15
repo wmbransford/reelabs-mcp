@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreGraphics
+import CoreImage
 import Foundation
 
 struct BuildResult: @unchecked Sendable {
@@ -286,71 +287,149 @@ final class CompositionBuilder: Sendable {
             let sorted = overlays.sorted { ($0.zIndex ?? 0) < ($1.zIndex ?? 0) }
 
             for overlay in sorted {
-                guard let asset = sourceAssets[overlay.sourceId] else {
-                    throw CompositionError.overlaySourceNotFound(overlay.sourceId)
-                }
-
-                let srcVideoTracks = try await asset.loadTracks(withMediaType: .video)
-                let srcAudioTracks = try await asset.loadTracks(withMediaType: .audio)
-
                 let overlayStart = CMTime(seconds: overlay.start, preferredTimescale: 600)
                 let overlayEnd = CMTime(seconds: overlay.end, preferredTimescale: 600)
                 let overlayDuration = CMTimeSubtract(overlayEnd, overlayStart)
-                let sourceOffset = CMTime(seconds: overlay.sourceStart ?? 0, preferredTimescale: 600)
-                let sourceRange = CMTimeRange(start: sourceOffset, duration: overlayDuration)
 
-                if let srcVT = srcVideoTracks.first {
-                    guard let ovTrack = composition.addMutableTrack(
-                        withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
-                    ) else {
-                        throw CompositionError.failedToCreateTrack
+                // Target rectangle in pixels (top-left origin)
+                let targetRect = CGRect(
+                    x: overlay.x * renderSize.width,
+                    y: overlay.y * renderSize.height,
+                    width: overlay.width * renderSize.width,
+                    height: overlay.height * renderSize.height
+                )
+
+                let fadeIn = overlay.fadeIn ?? 0
+                let fadeOut = overlay.fadeOut ?? 0
+
+                switch overlay.kind {
+                case .video:
+                    guard let sourceId = overlay.sourceId else {
+                        throw CompositionError.overlaySourceNotFound("<nil>")
                     }
-                    try ovTrack.insertTimeRange(sourceRange, of: srcVT, at: overlayStart)
-
-                    let naturalSize = try await srcVT.load(.naturalSize)
-                    let preferredTransform = try await srcVT.load(.preferredTransform)
-
-                    // Target rectangle in pixels (top-left origin)
-                    let targetRect = CGRect(
-                        x: overlay.x * renderSize.width,
-                        y: overlay.y * renderSize.height,
-                        width: overlay.width * renderSize.width,
-                        height: overlay.height * renderSize.height
-                    )
-
-                    // Convert crop spec to CGRect (0-1 fractions)
-                    let cropRect: CGRect? = overlay.crop.map {
-                        CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+                    guard let asset = sourceAssets[sourceId] else {
+                        throw CompositionError.overlaySourceNotFound(sourceId)
                     }
 
-                    overlayLayouts.append(OverlayLayout(
-                        trackID: ovTrack.trackID,
-                        overlayStart: overlayStart,
-                        overlayEnd: overlayEnd,
-                        preferredTransform: preferredTransform,
-                        naturalSize: naturalSize,
-                        targetRect: targetRect,
-                        cornerRadiusFraction: overlay.cornerRadius,
-                        cropRect: cropRect,
-                        opacity: Float(overlay.opacity ?? 1.0)
+                    let srcVideoTracks = try await asset.loadTracks(withMediaType: .video)
+                    let srcAudioTracks = try await asset.loadTracks(withMediaType: .audio)
+
+                    let sourceOffset = CMTime(seconds: overlay.sourceStart ?? 0, preferredTimescale: 600)
+
+                    // Auto-clamp: if overlay duration exceeds available source media, clamp it
+                    var effectiveOverlayDuration = overlayDuration
+                    var effectiveOverlayEnd = overlayEnd
+                    if let srcVT = srcVideoTracks.first {
+                        let srcDuration = try await srcVT.load(.timeRange).duration
+                        let availableDuration = CMTimeSubtract(srcDuration, sourceOffset)
+                        if CMTimeCompare(effectiveOverlayDuration, availableDuration) > 0 {
+                            captionLog("[Builder] Auto-clamping video overlay '\(sourceId)': requested \(round(CMTimeGetSeconds(effectiveOverlayDuration)*1000)/1000)s but only \(round(CMTimeGetSeconds(availableDuration)*1000)/1000)s available from sourceStart")
+                            effectiveOverlayDuration = availableDuration
+                            effectiveOverlayEnd = CMTimeAdd(overlayStart, effectiveOverlayDuration)
+                        }
+                    }
+
+                    let sourceRange = CMTimeRange(start: sourceOffset, duration: effectiveOverlayDuration)
+
+                    if let srcVT = srcVideoTracks.first {
+                        guard let ovTrack = composition.addMutableTrack(
+                            withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
+                        ) else {
+                            throw CompositionError.failedToCreateTrack
+                        }
+                        try ovTrack.insertTimeRange(sourceRange, of: srcVT, at: overlayStart)
+
+                        let naturalSize = try await srcVT.load(.naturalSize)
+                        let preferredTransform = try await srcVT.load(.preferredTransform)
+
+                        let cropRect: CGRect? = overlay.crop.map {
+                            CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+                        }
+
+                        overlayLayouts.append(OverlayLayout(
+                            trackID: ovTrack.trackID,
+                            overlayStart: overlayStart,
+                            overlayEnd: effectiveOverlayEnd,
+                            preferredTransform: preferredTransform,
+                            naturalSize: naturalSize,
+                            targetRect: targetRect,
+                            cornerRadiusFraction: overlay.cornerRadius,
+                            cropRect: cropRect,
+                            opacity: Float(overlay.opacity ?? 1.0),
+                            generatedImage: nil,
+                            fadeIn: fadeIn,
+                            fadeOut: fadeOut
+                        ))
+
+                        captionLog("[Builder] Overlay track: id=\(ovTrack.trackID) sourceId=\(sourceId) natSize=\(Int(naturalSize.width))x\(Int(naturalSize.height)) target=\(Int(targetRect.width))x\(Int(targetRect.height))@(\(Int(targetRect.origin.x)),\(Int(targetRect.origin.y))) time=\(round(CMTimeGetSeconds(overlayStart)*1000)/1000)..\(round(CMTimeGetSeconds(effectiveOverlayEnd)*1000)/1000) segments=\(ovTrack.segments?.count ?? 0)")
+                    }
+
+                    // Insert overlay audio if volume > 0
+                    let overlayAudioVolume = Float(overlay.audio ?? 0)
+                    if overlayAudioVolume > 0, let srcAT = srcAudioTracks.first {
+                        guard let ovAudioTrack = composition.addMutableTrack(
+                            withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
+                        ) else {
+                            throw CompositionError.failedToCreateTrack
+                        }
+                        try ovAudioTrack.insertTimeRange(sourceRange, of: srcAT, at: overlayStart)
+
+                        let ovAudioParams = AVMutableAudioMixInputParameters(track: ovAudioTrack)
+                        ovAudioParams.setVolume(overlayAudioVolume, at: overlayStart)
+                        audioMixParams.append(ovAudioParams)
+                    }
+
+                case .color:
+                    // Pre-render solid color rectangle as CIImage
+                    let bgColor = parseHexColor(overlay.backgroundColor ?? "#000000")
+                    let ciColor = CIColor(cgColor: bgColor)
+                    let colorImage = CIImage(color: ciColor).cropped(to: CGRect(
+                        x: 0, y: 0, width: targetRect.width, height: targetRect.height
                     ))
 
-                    captionLog("[Builder] Overlay track: id=\(ovTrack.trackID) sourceId=\(overlay.sourceId) natSize=\(Int(naturalSize.width))x\(Int(naturalSize.height)) target=\(Int(targetRect.width))x\(Int(targetRect.height))@(\(Int(targetRect.origin.x)),\(Int(targetRect.origin.y))) time=\(round(CMTimeGetSeconds(overlayStart)*1000)/1000)..\(round(CMTimeGetSeconds(overlayEnd)*1000)/1000) segments=\(ovTrack.segments?.count ?? 0)")
-                }
+                    overlayLayouts.append(OverlayLayout(
+                        trackID: kCMPersistentTrackID_Invalid,
+                        overlayStart: overlayStart,
+                        overlayEnd: overlayEnd,
+                        preferredTransform: .identity,
+                        naturalSize: targetRect.size,
+                        targetRect: targetRect,
+                        cornerRadiusFraction: overlay.cornerRadius,
+                        cropRect: nil,
+                        opacity: Float(overlay.opacity ?? 1.0),
+                        generatedImage: colorImage,
+                        fadeIn: fadeIn,
+                        fadeOut: fadeOut
+                    ))
 
-                // Insert overlay audio if volume > 0
-                let overlayAudioVolume = Float(overlay.audio ?? 0)
-                if overlayAudioVolume > 0, let srcAT = srcAudioTracks.first {
-                    guard let ovAudioTrack = composition.addMutableTrack(
-                        withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
-                    ) else {
-                        throw CompositionError.failedToCreateTrack
-                    }
-                    try ovAudioTrack.insertTimeRange(sourceRange, of: srcAT, at: overlayStart)
+                    captionLog("[Builder] Color overlay: bg=\(overlay.backgroundColor ?? "#000000") target=\(Int(targetRect.width))x\(Int(targetRect.height))@(\(Int(targetRect.origin.x)),\(Int(targetRect.origin.y))) time=\(round(CMTimeGetSeconds(overlayStart)*1000)/1000)..\(round(CMTimeGetSeconds(overlayEnd)*1000)/1000)")
 
-                    let ovAudioParams = AVMutableAudioMixInputParameters(track: ovAudioTrack)
-                    ovAudioParams.setVolume(overlayAudioVolume, at: overlayStart)
-                    audioMixParams.append(ovAudioParams)
+                case .text:
+                    // Pre-render text card as CIImage
+                    let textConfig = overlay.text!
+                    let textImage = TextOverlayRenderer.render(
+                        config: textConfig,
+                        backgroundColor: overlay.backgroundColor,
+                        size: targetRect.size,
+                        cornerRadius: overlay.cornerRadius
+                    )
+
+                    overlayLayouts.append(OverlayLayout(
+                        trackID: kCMPersistentTrackID_Invalid,
+                        overlayStart: overlayStart,
+                        overlayEnd: overlayEnd,
+                        preferredTransform: .identity,
+                        naturalSize: targetRect.size,
+                        targetRect: targetRect,
+                        cornerRadiusFraction: nil, // corner radius applied during rendering
+                        cropRect: nil,
+                        opacity: Float(overlay.opacity ?? 1.0),
+                        generatedImage: textImage,
+                        fadeIn: fadeIn,
+                        fadeOut: fadeOut
+                    ))
+
+                    captionLog("[Builder] Text overlay: title=\(textConfig.title ?? "<none>") target=\(Int(targetRect.width))x\(Int(targetRect.height))@(\(Int(targetRect.origin.x)),\(Int(targetRect.origin.y))) time=\(round(CMTimeGetSeconds(overlayStart)*1000)/1000)..\(round(CMTimeGetSeconds(overlayEnd)*1000)/1000)")
                 }
             }
         }
@@ -411,7 +490,8 @@ final class CompositionBuilder: Sendable {
                             transform: prev.transform,
                             transformEnd: nil,
                             opacity: 1.0 - relStart, opacityEnd: 1.0 - relEnd,
-                            targetRect: nil, cornerRadiusFraction: nil, cropRect: nil
+                            targetRect: nil, cornerRadiusFraction: nil, cropRect: nil,
+                            generatedImage: nil
                         ),
                         // Incoming layer (fade in)
                         LayerInfo(
@@ -421,7 +501,8 @@ final class CompositionBuilder: Sendable {
                             transform: layout.transform,
                             transformEnd: nil,
                             opacity: relStart, opacityEnd: relEnd,
-                            targetRect: nil, cornerRadiusFraction: nil, cropRect: nil
+                            targetRect: nil, cornerRadiusFraction: nil, cropRect: nil,
+                            generatedImage: nil
                         ),
                     ]
 
@@ -475,7 +556,8 @@ final class CompositionBuilder: Sendable {
                                     transform: txStart,
                                     transformEnd: txEnd,
                                     opacity: 1.0, opacityEnd: nil,
-                                    targetRect: nil, cornerRadiusFraction: nil, cropRect: nil
+                                    targetRect: nil, cornerRadiusFraction: nil, cropRect: nil,
+                                    generatedImage: nil
                                 ),
                             ]
                             appendOverlayLayers(to: &layers, overlayLayouts: overlayLayouts, timeRange: kfSubRange)
@@ -496,7 +578,8 @@ final class CompositionBuilder: Sendable {
                                 transform: layout.transform,
                                 transformEnd: nil,
                                 opacity: 1.0, opacityEnd: nil,
-                                targetRect: nil, cornerRadiusFraction: nil, cropRect: nil
+                                targetRect: nil, cornerRadiusFraction: nil, cropRect: nil,
+                                generatedImage: nil
                             ),
                         ]
                         appendOverlayLayers(to: &layers, overlayLayouts: overlayLayouts, timeRange: subRange)
@@ -543,6 +626,7 @@ final class CompositionBuilder: Sendable {
     }
 
     /// Append overlay LayerInfos to a layers array for any overlays that overlap the given time range.
+    /// Calculates fade-in/fade-out opacity ramps based on overlay timing.
     private func appendOverlayLayers(
         to layers: inout [LayerInfo],
         overlayLayouts: [OverlayLayout],
@@ -556,17 +640,42 @@ final class CompositionBuilder: Sendable {
             let ovEnd = CMTimeGetSeconds(ov.overlayEnd)
             guard max(spanStart, ovStart) < min(spanEnd, ovEnd) else { continue }
 
+            let baseOpacity = ov.opacity
+            let fadeInEnd = ovStart + ov.fadeIn
+            let fadeOutStart = ovEnd - ov.fadeOut
+
+            // Calculate opacity at the start and end of this sub-range
+            let opacityAtTime: (Double) -> Float = { t in
+                if ov.fadeIn > 0 && t < fadeInEnd {
+                    // In fade-in zone
+                    let progress = Float((t - ovStart) / ov.fadeIn)
+                    return baseOpacity * min(max(progress, 0), 1)
+                } else if ov.fadeOut > 0 && t > fadeOutStart {
+                    // In fade-out zone
+                    let progress = Float((ovEnd - t) / ov.fadeOut)
+                    return baseOpacity * min(max(progress, 0), 1)
+                }
+                return baseOpacity
+            }
+
+            let startOpacity = opacityAtTime(spanStart)
+            let endOpacity = opacityAtTime(spanEnd)
+
+            // Only use opacityEnd if opacity actually changes across the sub-range
+            let needsRamp = abs(startOpacity - endOpacity) > 0.001
+
             layers.append(LayerInfo(
                 trackID: ov.trackID,
                 preferredTransform: ov.preferredTransform,
                 naturalSize: ov.naturalSize,
                 transform: .identity,
                 transformEnd: nil,
-                opacity: ov.opacity,
-                opacityEnd: nil,
+                opacity: startOpacity,
+                opacityEnd: needsRamp ? endOpacity : nil,
                 targetRect: ov.targetRect,
                 cornerRadiusFraction: ov.cornerRadiusFraction,
-                cropRect: ov.cropRect
+                cropRect: ov.cropRect,
+                generatedImage: ov.generatedImage
             ))
         }
     }
@@ -594,6 +703,21 @@ final class CompositionBuilder: Sendable {
             if CMTimeCompare(ov.overlayEnd, rangeStart) > 0 &&
                CMTimeCompare(ov.overlayEnd, rangeEnd) < 0 {
                 splitPoints.append(ov.overlayEnd)
+            }
+            // Add fade boundaries as split points for smooth opacity ramps
+            if ov.fadeIn > 0 {
+                let fadeInEnd = CMTimeAdd(ov.overlayStart, CMTime(seconds: ov.fadeIn, preferredTimescale: 600))
+                if CMTimeCompare(fadeInEnd, rangeStart) > 0 &&
+                   CMTimeCompare(fadeInEnd, rangeEnd) < 0 {
+                    splitPoints.append(fadeInEnd)
+                }
+            }
+            if ov.fadeOut > 0 {
+                let fadeOutStart = CMTimeSubtract(ov.overlayEnd, CMTime(seconds: ov.fadeOut, preferredTimescale: 600))
+                if CMTimeCompare(fadeOutStart, rangeStart) > 0 &&
+                   CMTimeCompare(fadeOutStart, rangeEnd) < 0 {
+                    splitPoints.append(fadeOutStart)
+                }
             }
         }
 
@@ -630,7 +754,7 @@ final class CompositionBuilder: Sendable {
         )
     }
 
-    private struct OverlayLayout {
+    private struct OverlayLayout: @unchecked Sendable {
         let trackID: CMPersistentTrackID
         let overlayStart: CMTime
         let overlayEnd: CMTime
@@ -640,6 +764,9 @@ final class CompositionBuilder: Sendable {
         let cornerRadiusFraction: Double?
         let cropRect: CGRect?
         let opacity: Float
+        let generatedImage: CIImage?
+        let fadeIn: Double   // seconds, 0 = no fade
+        let fadeOut: Double   // seconds, 0 = no fade
     }
 
     private func buildAffineTransform(

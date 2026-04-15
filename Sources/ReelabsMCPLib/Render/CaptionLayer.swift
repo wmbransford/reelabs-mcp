@@ -337,16 +337,6 @@ enum CaptionLayer {
     }
 
     private static func parseColor(_ hex: String) -> CGColor {
-        var hexStr = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if hexStr.hasPrefix("#") { hexStr.removeFirst() }
-
-        var rgb: UInt64 = 0
-        Scanner(string: hexStr).scanHexInt64(&rgb)
-
-        let r = CGFloat((rgb >> 16) & 0xFF) / 255.0
-        let g = CGFloat((rgb >> 8) & 0xFF) / 255.0
-        let b = CGFloat(rgb & 0xFF) / 255.0
-
-        return CGColor(red: r, green: g, blue: b, alpha: 1.0)
+        parseHexColor(hex)
     }
 }

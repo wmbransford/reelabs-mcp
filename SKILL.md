@@ -279,11 +279,17 @@ Example:
 }
 ```
 
-**overlays** (optional) — video overlay tracks (B-roll, facecam PiP, etc.). Each overlay references a source declared in the `sources` array. Coordinates use 0.0-1.0 fractions of the render size with top-left origin.
+**overlays** (optional) — overlay tracks composited on top of the main video. Three overlay types:
+
+1. **Video overlay** — `sourceId` present. B-roll, PiP, etc. Source must be in the `sources` array.
+2. **Color overlay** — `backgroundColor` present (no `sourceId`, no `text`). Solid color rectangle.
+3. **Text overlay** — `text` present. Text card with optional background.
+
+Type is inferred from field presence. Coordinates use 0.0-1.0 fractions of the render size with top-left origin.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `sourceId` | string | — | must match a source id |
+| `sourceId` | string | — | required for video overlays, omit for color/text |
 | `start` | double | — | composition timeline: when overlay appears (seconds) |
 | `end` | double | — | composition timeline: when overlay disappears (seconds) |
 | `x` | double | — | 0.0-1.0 fraction from left edge |
@@ -291,13 +297,33 @@ Example:
 | `width` | double | — | 0.0-1.0 fraction of render width |
 | `height` | double | — | 0.0-1.0 fraction of render height |
 | `opacity` | double | 1.0 | 0.0 (invisible) to 1.0 (fully opaque) |
-| `sourceStart` | double | 0 | offset into overlay source file (seconds) |
+| `sourceStart` | double | 0 | offset into overlay source file (video overlays only) |
 | `zIndex` | int | 0 | stacking order — higher values render on top |
-| `audio` | double | 0 | overlay audio volume 0.0-1.0 (0 = muted) |
+| `audio` | double | 0 | overlay audio volume 0.0-1.0 (video overlays only) |
 | `cornerRadius` | double | 0 | 0.0 (sharp) to 1.0 (circle/pill). Maps to `cornerRadius * min(w,h) / 2` pixels |
-| `crop` | object | — | sub-region of source: `{x, y, width, height}` as 0-1 fractions. Selects region before cover-fill |
+| `crop` | object | — | sub-region of source: `{x, y, width, height}` as 0-1 fractions (video overlays only) |
+| `backgroundColor` | string | — | hex color `#RRGGBB` or `#RRGGBBAA`. Required for color overlays, optional for text |
+| `text` | object | — | text card config (see below). Makes this a text overlay |
+| `fadeIn` | double | 0 | seconds for opacity fade-in at overlay start |
+| `fadeOut` | double | 0 | seconds for opacity fade-out at overlay end |
 
-Overlay sources must be declared in the `sources` array just like segment sources.
+**text** object (TextOverlayConfig):
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `title` | string | — | title text (rendered larger, bold) |
+| `body` | string | — | body text (rendered smaller, regular) |
+| `titleColor` | string | "#FFFFFF" | hex color for title |
+| `bodyColor` | string | "#FFFFFF" | hex color for body |
+| `titleFontSize` | double | 48 | points |
+| `bodyFontSize` | double | 32 | points |
+| `titleFontWeight` | string | "bold" | font weight |
+| `bodyFontWeight` | string | "regular" | font weight |
+| `fontFamily` | string | "Arial" | font family |
+| `alignment` | string | "center" | "left", "center", "right" |
+| `padding` | double | 0.08 | 0.0-1.0 fraction of overlay size |
+
+Video overlay sources must be declared in the `sources` array. Video overlay duration is auto-clamped to available source media if it exceeds the source length.
 
 Example — B-roll overlay (muted, center of screen, appears 5-15s):
 ```json
@@ -348,6 +374,40 @@ Example — Circular facecam with cropped source (center 70% of frame):
       "cornerRadius": 1.0,
       "crop": {"x": 0.15, "y": 0.0, "width": 0.7, "height": 1.0},
       "audio": 0.8
+    }
+  ]
+}
+```
+
+Example — Color overlay (semi-transparent black lower third):
+```json
+{
+  "overlays": [
+    {
+      "backgroundColor": "#00000080",
+      "start": 2.0, "end": 8.0,
+      "x": 0.0, "y": 0.6, "width": 1.0, "height": 0.4
+    }
+  ]
+}
+```
+
+Example — Text card with fade in/out:
+```json
+{
+  "overlays": [
+    {
+      "text": {
+        "title": "Key Takeaway",
+        "body": "Users prefer simple onboarding flows",
+        "titleColor": "#FFD700",
+        "alignment": "left"
+      },
+      "backgroundColor": "#000000CC",
+      "start": 5.0, "end": 12.0,
+      "x": 0.05, "y": 0.6, "width": 0.9, "height": 0.3,
+      "cornerRadius": 0.05,
+      "fadeIn": 0.3, "fadeOut": 0.3
     }
   ]
 }
@@ -435,3 +495,39 @@ Example — slow zoom in over 10 seconds:
 ```
 
 To simulate ease-in-out, add intermediate keyframes with closer spacing near the start and end. No code changes needed — just more keyframes in the spec.
+
+## Re-render
+
+`reelabs_rerender` loads a previous render's spec, applies partial overrides, and re-renders. Useful for tweaking captions, quality, or overlays without resending the entire spec.
+
+**Inputs:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `render_id` | int | yes | ID of the previous render (from `reelabs_render` response) |
+| `overrides` | object | no | Partial RenderSpec — only the fields you want to change |
+| `output_path` | string | no | Override output path. Auto-generated if omitted |
+
+**Override examples:**
+
+Change caption preset:
+```json
+{
+  "render_id": 1,
+  "overrides": {
+    "captions": {"preset": "subtitle", "position": 85}
+  }
+}
+```
+
+Switch to HEVC codec:
+```json
+{
+  "render_id": 1,
+  "overrides": {
+    "quality": {"codec": "hevc"}
+  }
+}
+```
+
+Overrides are deep-merged: nested objects (captions, audio, quality) merge field-by-field, while arrays (sources, segments, overlays) replace entirely. The original render is preserved — a new render record is created.

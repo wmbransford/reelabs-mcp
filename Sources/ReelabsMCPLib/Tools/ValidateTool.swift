@@ -1,6 +1,13 @@
 import Foundation
 import MCP
 
+private func isValidHexColor(_ hex: String) -> Bool {
+    var str = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+    if str.hasPrefix("#") { str.removeFirst() }
+    guard str.count == 6 || str.count == 8 else { return false }
+    return str.allSatisfy { $0.isHexDigit }
+}
+
 package enum ValidateTool {
     package static let tool = Tool(
         name: "reelabs_validate",
@@ -98,8 +105,27 @@ package enum ValidateTool {
                 }
 
                 for (i, overlay) in overlays.enumerated() {
-                    if !sourceIds.contains(overlay.sourceId) {
-                        issues.append("Overlay \(i): references unknown source '\(overlay.sourceId)'")
+                    // Type-aware validation
+                    switch overlay.kind {
+                    case .video:
+                        if let sourceId = overlay.sourceId, !sourceIds.contains(sourceId) {
+                            issues.append("Overlay \(i): references unknown source '\(sourceId)'")
+                        }
+                    case .color:
+                        if let bg = overlay.backgroundColor, !isValidHexColor(bg) {
+                            issues.append("Overlay \(i): invalid backgroundColor '\(bg)' (expected #RRGGBB or #RRGGBBAA)")
+                        }
+                        if overlay.backgroundColor == nil {
+                            issues.append("Overlay \(i): color overlay requires backgroundColor")
+                        }
+                    case .text:
+                        let textConfig = overlay.text
+                        if (textConfig?.title == nil || textConfig!.title!.isEmpty) && (textConfig?.body == nil || textConfig!.body!.isEmpty) {
+                            issues.append("Overlay \(i): text overlay requires at least title or body")
+                        }
+                        if let bg = overlay.backgroundColor, !isValidHexColor(bg) {
+                            issues.append("Overlay \(i): invalid backgroundColor '\(bg)' (expected #RRGGBB or #RRGGBBAA)")
+                        }
                     }
 
                     if overlay.start < 0 {
@@ -137,20 +163,23 @@ package enum ValidateTool {
                         }
                     }
 
-                    if let sourceStart = overlay.sourceStart {
-                        if sourceStart < 0 {
-                            issues.append("Overlay \(i): sourceStart (\(sourceStart)s) is negative")
-                        }
-                        if let duration = sourceDurations[overlay.sourceId] {
-                            let neededEnd = sourceStart + (overlay.end - overlay.start)
-                            if neededEnd > duration + 0.1 {
-                                issues.append("Overlay \(i): sourceStart + overlay duration (\(round(neededEnd * 100) / 100)s) exceeds source duration (\(duration)s)")
+                    // Source duration checks only apply to video overlays
+                    if overlay.kind == .video, let sourceId = overlay.sourceId {
+                        if let sourceStart = overlay.sourceStart {
+                            if sourceStart < 0 {
+                                issues.append("Overlay \(i): sourceStart (\(sourceStart)s) is negative")
                             }
-                        }
-                    } else if let duration = sourceDurations[overlay.sourceId] {
-                        let overlayDuration = overlay.end - overlay.start
-                        if overlayDuration > duration + 0.1 {
-                            issues.append("Overlay \(i): overlay duration (\(round(overlayDuration * 100) / 100)s) exceeds source duration (\(duration)s)")
+                            if let duration = sourceDurations[sourceId] {
+                                let neededEnd = sourceStart + (overlay.end - overlay.start)
+                                if neededEnd > duration + 0.1 {
+                                    issues.append("Overlay \(i): sourceStart + overlay duration (\(round(neededEnd * 100) / 100)s) exceeds source duration (\(duration)s) — will be auto-clamped")
+                                }
+                            }
+                        } else if let duration = sourceDurations[sourceId] {
+                            let overlayDuration = overlay.end - overlay.start
+                            if overlayDuration > duration + 0.1 {
+                                issues.append("Overlay \(i): overlay duration (\(round(overlayDuration * 100) / 100)s) exceeds source duration (\(duration)s) — will be auto-clamped")
+                            }
                         }
                     }
 
@@ -186,10 +215,19 @@ package enum ValidateTool {
                             issues.append("Overlay \(i): crop.y + crop.height (\(crop.y + crop.height)) exceeds 1.0")
                         }
                     }
+
+                    if let fadeIn = overlay.fadeIn, fadeIn < 0 {
+                        issues.append("Overlay \(i): fadeIn (\(fadeIn)s) must be non-negative")
+                    }
+                    if let fadeOut = overlay.fadeOut, fadeOut < 0 {
+                        issues.append("Overlay \(i): fadeOut (\(fadeOut)s) must be non-negative")
+                    }
                 }
             }
 
             // Validate captions transcripts
+            // Only warn about missing transcriptId for sources actually used in segments
+            let segmentSourceIds = Set(spec.segments.map { $0.sourceId })
             let hasPerSourceTranscripts = spec.sources.contains { $0.transcriptId != nil }
             if hasPerSourceTranscripts {
                 // Per-source mode: validate each source's transcriptId
@@ -198,7 +236,8 @@ package enum ValidateTool {
                         if try transcriptRepo.get(id: Int64(tid)) == nil {
                             issues.append("Source '\(source.id)': transcript \(tid) not found in database")
                         }
-                    } else if spec.captions != nil {
+                    } else if spec.captions != nil && segmentSourceIds.contains(source.id) {
+                        // Only warn for sources used in segments, not overlay-only sources
                         issues.append("Warning: source '\(source.id)' has no transcriptId — segments from this source won't have captions")
                     }
                 }

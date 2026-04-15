@@ -14,6 +14,36 @@ package struct RenderSpec: Codable, Sendable {
     let fps: Double?
     let outputPath: String
 
+    package init(
+        sources: [Source], segments: [SegmentSpec],
+        captions: CaptionConfig?, audio: AudioConfig?,
+        quality: QualityConfig?, overlays: [Overlay]?,
+        aspectRatio: AspectRatio?, resolution: Resolution?,
+        fps: Double?, outputPath: String
+    ) {
+        self.sources = sources
+        self.segments = segments
+        self.captions = captions
+        self.audio = audio
+        self.quality = quality
+        self.overlays = overlays
+        self.aspectRatio = aspectRatio
+        self.resolution = resolution
+        self.fps = fps
+        self.outputPath = outputPath
+    }
+
+    /// Return a copy with a different outputPath.
+    func withOutputPath(_ path: String) -> RenderSpec {
+        RenderSpec(
+            sources: sources, segments: segments,
+            captions: captions, audio: audio,
+            quality: quality, overlays: overlays,
+            aspectRatio: aspectRatio, resolution: resolution,
+            fps: fps, outputPath: path
+        )
+    }
+
     package struct Source: Codable, Sendable {
         let id: String
         let path: String
@@ -174,7 +204,7 @@ package struct QualityConfig: Codable, Sendable {
 // MARK: - Overlay
 
 package struct Overlay: Codable, Sendable {
-    let sourceId: String
+    let sourceId: String?   // required for video overlays, nil for generated (color/text)
     let start: Double       // composition timeline: when overlay appears
     let end: Double         // composition timeline: when overlay disappears
     let x: Double           // 0.0-1.0 fraction of render width (top-left origin)
@@ -187,6 +217,39 @@ package struct Overlay: Codable, Sendable {
     let audio: Double?      // overlay audio volume 0.0-1.0, default 0 (muted)
     let cornerRadius: Double? // 0.0 (sharp) to 1.0 (circle/pill)
     let crop: CropRect?     // sub-region of source video (0-1 fractions)
+    let backgroundColor: String? // hex color (#RRGGBB or #RRGGBBAA) for color/text overlays
+    let text: TextOverlayConfig? // text card content and styling
+    let fadeIn: Double?     // seconds for opacity fade-in at start
+    let fadeOut: Double?    // seconds for opacity fade-out at end
+
+    /// Overlay kind inferred from field presence.
+    package enum Kind {
+        case video       // sourceId present
+        case color       // backgroundColor present, no sourceId, no text
+        case text        // text present (with optional backgroundColor)
+    }
+
+    package var kind: Kind {
+        if sourceId != nil { return .video }
+        if text != nil { return .text }
+        return .color
+    }
+}
+
+// MARK: - Text Overlay Config
+
+package struct TextOverlayConfig: Codable, Sendable {
+    let title: String?
+    let body: String?
+    let titleColor: String?      // hex, default #FFFFFF
+    let bodyColor: String?       // hex, default #FFFFFF
+    let titleFontSize: Double?   // points, default 48
+    let bodyFontSize: Double?    // points, default 32
+    let titleFontWeight: String? // default "bold"
+    let bodyFontWeight: String?  // default "regular"
+    let fontFamily: String?      // default "Arial"
+    let alignment: String?       // "left", "center", "right" — default "center"
+    let padding: Double?         // 0.0-1.0 fraction of overlay size, default 0.08
 }
 
 // MARK: - Crop Rect

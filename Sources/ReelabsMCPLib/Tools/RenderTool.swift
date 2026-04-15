@@ -4,7 +4,7 @@ import MCP
 package enum RenderTool {
     package static let tool = Tool(
         name: "reelabs_render",
-        description: "Render a video from a declarative RenderSpec. Handles trimming, speed changes, transitions, captions, audio mixing, aspect ratio, and overlays. Pass the full spec as JSON.",
+        description: "Render a video from a declarative RenderSpec. Handles trimming, speed changes, transitions, captions, audio mixing, aspect ratio, and overlays (video, color, text). Pass the full spec as JSON.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([

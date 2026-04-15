@@ -208,6 +208,135 @@ struct RenderSpecDecodingTests {
         #expect(overlay.cornerRadius == 0.1)
         #expect(overlay.crop?.x == 0.1)
         #expect(overlay.crop?.width == 0.8)
+        #expect(overlay.kind == .video)
+    }
+
+    @Test("Color overlay decodes — no sourceId required")
+    func colorOverlayDecoding() throws {
+        let json = """
+        {
+            "sources": [{"id": "main", "path": "/tmp/main.mp4"}],
+            "segments": [{"source_id": "main", "start": 0, "end": 10}],
+            "overlays": [{
+                "background_color": "#00000080",
+                "start": 2.0,
+                "end": 8.0,
+                "x": 0.0, "y": 0.6, "width": 1.0, "height": 0.4
+            }],
+            "output_path": "/tmp/o.mp4"
+        }
+        """
+        let spec = try decode(json)
+        let overlay = try #require(spec.overlays?.first)
+
+        #expect(overlay.sourceId == nil)
+        #expect(overlay.backgroundColor == "#00000080")
+        #expect(overlay.kind == .color)
+        #expect(overlay.text == nil)
+    }
+
+    @Test("Text overlay decodes with all fields")
+    func textOverlayDecoding() throws {
+        let json = """
+        {
+            "sources": [{"id": "main", "path": "/tmp/main.mp4"}],
+            "segments": [{"source_id": "main", "start": 0, "end": 10}],
+            "overlays": [{
+                "text": {
+                    "title": "Key Point",
+                    "body": "This is the body text",
+                    "title_color": "#FFD700",
+                    "alignment": "left",
+                    "padding": 0.1
+                },
+                "background_color": "#000000CC",
+                "start": 5.0, "end": 12.0,
+                "x": 0.05, "y": 0.6, "width": 0.9, "height": 0.3,
+                "corner_radius": 0.05,
+                "fade_in": 0.3,
+                "fade_out": 0.3
+            }],
+            "output_path": "/tmp/o.mp4"
+        }
+        """
+        let spec = try decode(json)
+        let overlay = try #require(spec.overlays?.first)
+
+        #expect(overlay.kind == .text)
+        #expect(overlay.text?.title == "Key Point")
+        #expect(overlay.text?.body == "This is the body text")
+        #expect(overlay.text?.titleColor == "#FFD700")
+        #expect(overlay.text?.alignment == "left")
+        #expect(overlay.text?.padding == 0.1)
+        #expect(overlay.backgroundColor == "#000000CC")
+        #expect(overlay.fadeIn == 0.3)
+        #expect(overlay.fadeOut == 0.3)
+        #expect(overlay.cornerRadius == 0.05)
+    }
+
+    @Test("Fade fields default to nil when omitted")
+    func fadeFieldsDefaultNil() throws {
+        let json = """
+        {
+            "sources": [{"id": "main", "path": "/tmp/main.mp4"}],
+            "segments": [{"source_id": "main", "start": 0, "end": 10}],
+            "overlays": [{
+                "source_id": "main",
+                "start": 0, "end": 5,
+                "x": 0, "y": 0, "width": 1, "height": 1
+            }],
+            "output_path": "/tmp/o.mp4"
+        }
+        """
+        let spec = try decode(json)
+        let overlay = try #require(spec.overlays?.first)
+
+        #expect(overlay.fadeIn == nil)
+        #expect(overlay.fadeOut == nil)
+        #expect(overlay.backgroundColor == nil)
+        #expect(overlay.text == nil)
+        #expect(overlay.kind == .video)
+    }
+
+    @Test("Kind inference: sourceId always wins as video")
+    func kindInferenceSourceIdWins() throws {
+        // Even with backgroundColor, sourceId makes it a video overlay
+        let json = """
+        {
+            "sources": [{"id": "main", "path": "/tmp/main.mp4"}],
+            "segments": [{"source_id": "main", "start": 0, "end": 10}],
+            "overlays": [{
+                "source_id": "main",
+                "background_color": "#FF0000",
+                "start": 0, "end": 5,
+                "x": 0, "y": 0, "width": 1, "height": 1
+            }],
+            "output_path": "/tmp/o.mp4"
+        }
+        """
+        let spec = try decode(json)
+        let overlay = try #require(spec.overlays?.first)
+        #expect(overlay.kind == .video)
+    }
+
+    @Test("Kind inference: text with backgroundColor is text type")
+    func kindInferenceTextWithBg() throws {
+        let json = """
+        {
+            "sources": [{"id": "main", "path": "/tmp/main.mp4"}],
+            "segments": [{"source_id": "main", "start": 0, "end": 10}],
+            "overlays": [{
+                "text": {"title": "Hello"},
+                "background_color": "#000000",
+                "start": 0, "end": 5,
+                "x": 0, "y": 0, "width": 1, "height": 1
+            }],
+            "output_path": "/tmp/o.mp4"
+        }
+        """
+        let spec = try decode(json)
+        let overlay = try #require(spec.overlays?.first)
+        #expect(overlay.kind == .text)
     }
 
     @Test("Keyframes decode in segment")

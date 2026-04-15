@@ -210,6 +210,12 @@ package struct RenderRepository: Sendable {
         }
     }
 
+    package func get(id: Int64) throws -> Row? {
+        try dbPool.read { db in
+            try Row.fetchOne(db, sql: "SELECT * FROM renders WHERE id = ?", arguments: [id])
+        }
+    }
+
     package func list(projectId: Int64? = nil, limit: Int = 50) throws -> [Row] {
         try dbPool.read { db in
             if let projectId {

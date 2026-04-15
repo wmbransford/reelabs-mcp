@@ -19,6 +19,9 @@ struct LayerInfo: @unchecked Sendable {
     let targetRect: CGRect?           // pixel rect, top-left origin
     let cornerRadiusFraction: Double? // 0.0-1.0
     let cropRect: CGRect?             // 0-1 fractions of source
+
+    // Generated overlay (color/text) — pre-rendered CIImage, skip sourceFrame lookup
+    let generatedImage: CIImage?
 }
 
 /// Custom instruction that carries an ordered list of layers for the compositor.
@@ -38,10 +41,11 @@ final class CompositorInstruction: NSObject, AVVideoCompositionInstructionProtoc
         self.layers = layers
         self._renderSize = renderSize
 
-        // Build unique track IDs from layers
+        // Build unique track IDs from layers (skip generated overlays with sentinel trackID)
         var trackIDs: [NSValue] = []
         var seen = Set<CMPersistentTrackID>()
         for layer in layers {
+            guard layer.generatedImage == nil else { continue }
             if !seen.contains(layer.trackID) {
                 seen.insert(layer.trackID)
                 trackIDs.append(NSNumber(value: layer.trackID))
