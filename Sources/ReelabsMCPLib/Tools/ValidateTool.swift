@@ -37,6 +37,10 @@ package enum ValidateTool {
 
             var issues: [String] = []
 
+            if spec.segments.isEmpty {
+                issues.append("No segments defined — nothing to render.")
+            }
+
             // Validate sources exist
             var sourceIds = Set<String>()
             var sourceDurations: [String: Double] = [:]

@@ -23,7 +23,8 @@ if let oldPidString = try? String(contentsOf: pidFile, encoding: .utf8).trimming
 try "\(ProcessInfo.processInfo.processIdentifier)".write(to: pidFile, atomically: true, encoding: .utf8)
 
 // Load configuration
-let config = ServerConfig.load()
+let loadResult = ServerConfig.load()
+let config = loadResult.config
 
 // Initialize database
 let db = try DatabaseManager(path: config.databasePath)
@@ -38,6 +39,29 @@ let analysisRepo = VisualAnalysisRepository(dbPool: db.dbPool)
 
 // Seed default presets on first run
 try DefaultPresets.seed(repo: presetRepo)
+
+// MARK: - Startup Validation
+
+do {
+    let startupLogger = Logger(label: "reelabs.startup")
+    startupLogger.info("ReeLabs MCP v2.0.0")
+    startupLogger.info("Config: \(loadResult.configSource)")
+
+    if let saPath = config.serviceAccountPath {
+        let readable = FileManager.default.isReadableFile(atPath: saPath)
+        startupLogger.info("Service account: \(saPath) (readable: \(readable))")
+    } else {
+        startupLogger.warning("Service account: not configured (transcription disabled)")
+    }
+
+    let dbPath: String
+    if let configDbPath = config.databasePath {
+        dbPath = configDbPath
+    } else {
+        dbPath = (try? DatabaseManager.databaseURL().path) ?? "<unknown>"
+    }
+    startupLogger.info("Database: \(dbPath)")
+}
 
 // MARK: - Server Configuration
 
@@ -112,6 +136,8 @@ if let portIdx = CommandLine.arguments.firstIndex(of: "--port"), portIdx + 1 < C
 }
 
 let host = config.httpHost ?? "127.0.0.1"
+
+Logger(label: "reelabs.startup").info("Server: \(host):\(port)")
 
 // MARK: - Start HTTP Server
 

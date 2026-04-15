@@ -725,7 +725,8 @@ final class CompositionBuilder: Sendable {
         splitPoints.sort { CMTimeCompare($0, $1) < 0 }
         var unique: [CMTime] = [splitPoints[0]]
         for i in 1..<splitPoints.count {
-            if CMTimeCompare(splitPoints[i], unique.last!) != 0 {
+            guard let last = unique.last else { continue }
+            if CMTimeCompare(splitPoints[i], last) != 0 {
                 unique.append(splitPoints[i])
             }
         }

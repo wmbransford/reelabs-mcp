@@ -8,6 +8,7 @@ func encode<T: Encodable>(_ value: T) -> String {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     guard let data = try? encoder.encode(value),
           let json = String(data: data, encoding: .utf8) else {
+        fputs("[ReeLabs] Warning: failed to encode \(T.self) to JSON, returning {}\n", stderr)
         return "{}"
     }
     return json

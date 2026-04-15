@@ -10,7 +10,12 @@ package struct ServerConfig: Sendable {
     package let httpPort: Int?
     package let httpHost: String?
 
-    package static func load() -> ServerConfig {
+    package struct LoadResult: Sendable {
+        package let config: ServerConfig
+        package let configSource: String
+    }
+
+    package static func load() -> LoadResult {
         // Resolve config.json relative to the binary or current directory
         let configPaths = [
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("config.json"),
@@ -34,7 +39,7 @@ package struct ServerConfig: Sendable {
                     }
                 }
 
-                return ServerConfig(
+                let config = ServerConfig(
                     chirpProjectId: json["chirp_project_id"] as? String ?? "",
                     chirpLocation: json["chirp_location"] as? String ?? "us",
                     chirpModel: json["chirp_model"] as? String ?? "chirp_3",
@@ -44,10 +49,11 @@ package struct ServerConfig: Sendable {
                     httpPort: json["http_port"] as? Int,
                     httpHost: json["http_host"] as? String
                 )
+                return LoadResult(config: config, configSource: configPath.path)
             }
         }
 
-        return ServerConfig(
+        let config = ServerConfig(
             chirpProjectId: "",
             chirpLocation: "us",
             chirpModel: "chirp_3",
@@ -57,6 +63,7 @@ package struct ServerConfig: Sendable {
             httpPort: nil,
             httpHost: nil
         )
+        return LoadResult(config: config, configSource: "defaults")
     }
 }
 

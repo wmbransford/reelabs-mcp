@@ -334,7 +334,7 @@ private final class HTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                     }
                 }
             } catch {
-                // Stream ended with error — close connection
+                self.app.logger.error("SSE stream error: \(error.localizedDescription)")
             }
 
             eventLoop.execute {

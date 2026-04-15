@@ -48,7 +48,10 @@ package enum RerenderTool {
             // Decode the base spec
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
-            var baseSpec = try decoder.decode(RenderSpec.self, from: specJson.data(using: .utf8)!)
+            guard let specData = specJson.data(using: .utf8) else {
+                return .init(content: [.text(text: "Render \(renderId) stored spec contains invalid encoding", annotations: nil, _meta: nil)], isError: true)
+            }
+            var baseSpec = try decoder.decode(RenderSpec.self, from: specData)
 
             // Apply overrides if provided
             if let overrides = arguments?["overrides"] {

@@ -32,7 +32,11 @@ final class ChirpClient: Sendable {
             let gcsURI = try await uploadToGCS(flacURL: flacURL, objectName: objectName, accessToken: accessToken)
             defer {
                 Task { [gcsBucket, accessToken] in
-                    try? await ChirpClient.deleteFromGCS(bucket: gcsBucket, objectName: objectName, accessToken: accessToken)
+                    do {
+                        try await ChirpClient.deleteFromGCS(bucket: gcsBucket, objectName: objectName, accessToken: accessToken)
+                    } catch {
+                        captionLog("[ChirpClient] Warning: failed to delete GCS object '\(objectName)': \(error.localizedDescription)")
+                    }
                 }
             }
             return try await transcribeBatch(gcsURI: gcsURI, accessToken: accessToken, language: language)
@@ -127,7 +131,7 @@ final class ChirpClient: Sendable {
         request.httpMethod = "DELETE"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
-        _ = try? await URLSession.shared.data(for: request)
+        _ = try await URLSession.shared.data(for: request)
     }
 
     // MARK: - Batch Recognize (long audio via GCS)

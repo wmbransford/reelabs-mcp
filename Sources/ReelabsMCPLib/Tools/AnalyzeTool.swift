@@ -98,16 +98,9 @@ package enum AnalyzeTool {
 
         let analysisId = analysis.id!
 
-        // Create frames directory
-        let appSupport = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let framesDir = appSupport
-            .appendingPathComponent("ReelabsMCP", isDirectory: true)
-            .appendingPathComponent("frames", isDirectory: true)
+        // Create frames directory in the working directory (visible and user-deletable)
+        let framesDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Extracted Frames", isDirectory: true)
             .appendingPathComponent("\(analysisId)", isDirectory: true)
 
         // Extract frames
@@ -125,13 +118,47 @@ package enum AnalyzeTool {
             ["time": frame.time, "path": frame.path] as [String: Any]
         }
 
+        let instructions = """
+        VISUAL ANALYSIS INSTRUCTIONS
+
+        These are sequential frames extracted from a video at \(sampleFps) fps (\(String(format: "%.1f", (durationSeconds * 10).rounded() / 10))s total). \
+        They are a temporal sequence — not independent images. Analyze them as a video.
+
+        HOW TO ANALYZE:
+        1. Scan all frames in order. Identify where the visual content meaningfully changes — \
+        these are your scene boundaries. Consecutive frames showing the same setup, \
+        speaker position, and background are ONE scene, not separate observations.
+        2. For each scene, describe what is visually happening using the FIRST frame where \
+        it appears. Do not repeat the same description across multiple scenes.
+        3. Note transitions: what changed from the previous scene? New speaker position, \
+        cut to screen recording, camera angle change, new location, graphic overlay, etc.
+
+        WHAT TO OUTPUT:
+        Call reelabs_analyze with action "store" and analysis_id \(analysisId). Provide a scenes array where each scene has:
+        - start_time: timestamp of the first frame in the scene
+        - end_time: timestamp of the last frame in the scene (or start of next scene)
+        - description: what is visually happening (1-2 sentences max). Focus on content \
+        useful for editing decisions — who/what is on screen, framing, on-screen text, \
+        visual quality issues (overexposed, blurry, etc.)
+        - scene_type: one of "talking_head", "b_roll", "screen_recording", "title_card", \
+        "transition", "demo", "interview", "other"
+        - tags: short descriptive tags for searchability (e.g. ["wide_shot", "outdoors", "product_demo"])
+
+        EFFICIENCY RULES:
+        - A 2-minute talking head with the same framing is ONE scene, not 120 frames described individually.
+        - Only create a new scene when something visually changes on screen.
+        - Typical videos have 3-15 scenes, not one per frame.
+        - If the entire video is a single static setup, that is 1 scene. That's fine.
+        """
+
         let response: [String: Any] = [
             "analysis_id": analysisId,
             "duration_seconds": (durationSeconds * 10).rounded() / 10,
             "frame_count": frames.count,
             "sample_fps": sampleFps,
             "frames_dir": framesDir.path,
-            "frames": framesJson
+            "frames": framesJson,
+            "instructions": instructions
         ]
 
         let jsonData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])

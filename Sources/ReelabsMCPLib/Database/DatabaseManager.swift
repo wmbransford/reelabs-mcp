@@ -4,8 +4,8 @@ import GRDB
 package final class DatabaseManager: Sendable {
     package let dbPool: DatabasePool
 
-    static var databaseURL: URL {
-        let appSupport = try! FileManager.default.url(
+    package static func databaseURL() throws -> URL {
+        let appSupport = try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
@@ -17,7 +17,12 @@ package final class DatabaseManager: Sendable {
     }
 
     package init(path: String? = nil) throws {
-        let url = path.map { URL(fileURLWithPath: $0) } ?? Self.databaseURL
+        let url: URL
+        if let path {
+            url = URL(fileURLWithPath: path)
+        } else {
+            url = try Self.databaseURL()
+        }
         let directoryURL = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
 

@@ -93,8 +93,16 @@ package enum RenderTool {
                 guard let preset = try presetRepo.get(name: presetName) else {
                     return .init(content: [.text(text: "Caption error: preset '\(presetName)' not found. Available: tiktok, subtitle, minimal, bold_center.", annotations: nil, _meta: nil)], isError: true)
                 }
-                let presetConfig = try JSONDecoder().decode(CaptionConfig.self, from: preset.configJson.data(using: .utf8)!)
+                guard let presetData = preset.configJson.data(using: .utf8) else {
+                    return .init(content: [.text(text: "Caption error: preset '\(presetName)' contains invalid encoding", annotations: nil, _meta: nil)], isError: true)
+                }
+                let presetConfig = try JSONDecoder().decode(CaptionConfig.self, from: presetData)
                 resolvedCaptionConfig = mergeCaptionConfig(base: presetConfig, override: spec.captions)
+            }
+
+            // Validate segments are not empty
+            if spec.segments.isEmpty {
+                return .init(content: [.text(text: "No segments defined — nothing to render.", annotations: nil, _meta: nil)], isError: true)
             }
 
             // Validate music file exists before building
@@ -123,17 +131,22 @@ package enum RenderTool {
                 return .init(content: [.text(text: "Caption error: no words fall within segment time ranges. Check segment boundaries.", annotations: nil, _meta: nil)], isError: true)
             }
 
-            let result = try await builder.build(spec: spec)
-            let exportResult = try await exportService.export(
-                composition: result.composition,
-                videoComposition: result.videoComposition,
-                audioMix: result.audioMix,
-                outputURL: outputURL,
-                captionConfig: resolvedCaptionConfig,
-                transcriptData: transcriptData,
-                renderSize: result.renderSize,
-                quality: spec.quality
-            )
+            let captionConfigForRender = resolvedCaptionConfig
+            let transcriptDataForRender = transcriptData
+            let (result, exportResult) = try await RenderQueue.shared.enqueue {
+                let result = try await builder.build(spec: spec)
+                let exportResult = try await exportService.export(
+                    composition: result.composition,
+                    videoComposition: result.videoComposition,
+                    audioMix: result.audioMix,
+                    outputURL: outputURL,
+                    captionConfig: captionConfigForRender,
+                    transcriptData: transcriptDataForRender,
+                    renderSize: result.renderSize,
+                    quality: spec.quality
+                )
+                return (result, exportResult)
+            }
 
             // Fail loudly if captions were requested but not applied
             if spec.captions != nil && !exportResult.captionsApplied {

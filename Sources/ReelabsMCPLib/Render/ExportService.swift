@@ -10,7 +10,8 @@ func captionLog(_ message: String) {
     fputs(line, stderr)
     if let handle = FileHandle(forWritingAtPath: logPath) {
         handle.seekToEndOfFile()
-        handle.write(line.data(using: .utf8)!)
+        guard let lineData = line.data(using: .utf8) else { return }
+        handle.write(lineData)
         handle.closeFile()
     } else {
         FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
@@ -299,7 +300,12 @@ final class ExportService: Sendable {
         let preset = Self.exportPreset(for: renderSize, codec: codec)
 
         // Temp file in Application Support
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
         let tmpDir = appSupport.appendingPathComponent("ReelabsMCP/tmp", isDirectory: true)
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
         let tempURL = tmpDir.appendingPathComponent("pass1_\(UUID().uuidString).mp4")
