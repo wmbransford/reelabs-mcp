@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-struct Asset: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Identifiable {
-    var id: Int64?
+package struct Asset: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Identifiable {
+    package var id: Int64?
     var projectId: Int64
     var filePath: String
     var filename: String
@@ -16,7 +16,7 @@ struct Asset: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Iden
     var tags: String?
     var createdAt: String
 
-    static let databaseTableName = "assets"
+    package static let databaseTableName = "assets"
 
     init(projectId: Int64, filePath: String, filename: String) {
         self.projectId = projectId
@@ -26,7 +26,7 @@ struct Asset: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Iden
         self.createdAt = Project.timestamp()
     }
 
-    mutating func didInsert(_ inserted: InsertionSuccess) {
+    package mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
     }
 }

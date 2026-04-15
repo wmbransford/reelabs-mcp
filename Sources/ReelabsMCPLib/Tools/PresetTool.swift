@@ -1,8 +1,8 @@
 import Foundation
 import MCP
 
-enum PresetTool {
-    static let tool = Tool(
+package enum PresetTool {
+    package static let tool = Tool(
         name: "reelabs_preset",
         description: "Manage reusable presets for captions, render settings, and audio. Actions: save (name, type, config), get (name), list (type?), delete (name).",
         inputSchema: .object([
@@ -35,7 +35,7 @@ enum PresetTool {
         ])
     )
 
-    static func handle(arguments: [String: Value]?, presetRepo: PresetRepository) -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, presetRepo: PresetRepository) -> CallTool.Result {
         guard let action = arguments?["action"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: action", annotations: nil, _meta: nil)], isError: true)
         }

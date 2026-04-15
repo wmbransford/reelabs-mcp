@@ -294,7 +294,6 @@ Example:
 | `sourceStart` | double | 0 | offset into overlay source file (seconds) |
 | `zIndex` | int | 0 | stacking order — higher values render on top |
 | `audio` | double | 0 | overlay audio volume 0.0-1.0 (0 = muted) |
-| `mainAudioVolume` | double | — | main track volume during overlay 0.0-1.0. Omit = unchanged. 0.0 = mute main, 0.3 = duck |
 | `cornerRadius` | double | 0 | 0.0 (sharp) to 1.0 (circle/pill). Maps to `cornerRadius * min(w,h) / 2` pixels |
 | `crop` | object | — | sub-region of source: `{x, y, width, height}` as 0-1 fractions. Selects region before cover-fill |
 

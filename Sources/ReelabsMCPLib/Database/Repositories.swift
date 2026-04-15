@@ -3,10 +3,12 @@ import GRDB
 
 // MARK: - Project Repository
 
-struct ProjectRepository: Sendable {
-    let dbPool: DatabasePool
+package struct ProjectRepository: Sendable {
+    package let dbPool: DatabasePool
 
-    func create(name: String, description: String? = nil) throws -> Project {
+    package init(dbPool: DatabasePool) { self.dbPool = dbPool }
+
+    package func create(name: String, description: String? = nil) throws -> Project {
         try dbPool.write { db in
             var project = Project(name: name, description: description)
             try project.insert(db)
@@ -14,7 +16,7 @@ struct ProjectRepository: Sendable {
         }
     }
 
-    func list(status: String? = nil) throws -> [Project] {
+    package func list(status: String? = nil) throws -> [Project] {
         try dbPool.read { db in
             if let status {
                 return try Project.filter(Column("status") == status).fetchAll(db)
@@ -23,13 +25,13 @@ struct ProjectRepository: Sendable {
         }
     }
 
-    func get(id: Int64) throws -> Project? {
+    package func get(id: Int64) throws -> Project? {
         try dbPool.read { db in
             try Project.fetchOne(db, key: id)
         }
     }
 
-    func archive(id: Int64) throws -> Project? {
+    package func archive(id: Int64) throws -> Project? {
         try dbPool.write { db in
             guard var project = try Project.fetchOne(db, key: id) else { return nil }
             project.status = "archived"
@@ -39,7 +41,7 @@ struct ProjectRepository: Sendable {
         }
     }
 
-    func delete(id: Int64) throws -> Bool {
+    package func delete(id: Int64) throws -> Bool {
         try dbPool.write { db in
             try Project.deleteOne(db, key: id)
         }
@@ -48,10 +50,12 @@ struct ProjectRepository: Sendable {
 
 // MARK: - Asset Repository
 
-struct AssetRepository: Sendable {
-    let dbPool: DatabasePool
+package struct AssetRepository: Sendable {
+    package let dbPool: DatabasePool
 
-    func create(_ asset: Asset) throws -> Asset {
+    package init(dbPool: DatabasePool) { self.dbPool = dbPool }
+
+    package func create(_ asset: Asset) throws -> Asset {
         try dbPool.write { db in
             var a = asset
             try a.insert(db)
@@ -59,19 +63,19 @@ struct AssetRepository: Sendable {
         }
     }
 
-    func list(projectId: Int64) throws -> [Asset] {
+    package func list(projectId: Int64) throws -> [Asset] {
         try dbPool.read { db in
             try Asset.filter(Column("projectId") == projectId).fetchAll(db)
         }
     }
 
-    func get(id: Int64) throws -> Asset? {
+    package func get(id: Int64) throws -> Asset? {
         try dbPool.read { db in
             try Asset.fetchOne(db, key: id)
         }
     }
 
-    func updateMetadata(id: Int64, durationMs: Int?, width: Int?, height: Int?, fps: Double?, codec: String?, hasAudio: Bool, fileSizeBytes: Int64?) throws {
+    package func updateMetadata(id: Int64, durationMs: Int?, width: Int?, height: Int?, fps: Double?, codec: String?, hasAudio: Bool, fileSizeBytes: Int64?) throws {
         try dbPool.write { db in
             guard var asset = try Asset.fetchOne(db, key: id) else { return }
             asset.durationMs = durationMs
@@ -85,7 +89,7 @@ struct AssetRepository: Sendable {
         }
     }
 
-    func updateTags(id: Int64, tags: [String]) throws {
+    package func updateTags(id: Int64, tags: [String]) throws {
         try dbPool.write { db in
             guard var asset = try Asset.fetchOne(db, key: id) else { return }
             let data = try JSONEncoder().encode(tags)
@@ -94,7 +98,7 @@ struct AssetRepository: Sendable {
         }
     }
 
-    func delete(id: Int64) throws -> Bool {
+    package func delete(id: Int64) throws -> Bool {
         try dbPool.write { db in
             try Asset.deleteOne(db, key: id)
         }
@@ -103,11 +107,13 @@ struct AssetRepository: Sendable {
 
 // MARK: - Transcript Repository
 
-struct TranscriptRepository: Sendable {
-    let dbPool: DatabasePool
+package struct TranscriptRepository: Sendable {
+    package let dbPool: DatabasePool
+
+    package init(dbPool: DatabasePool) { self.dbPool = dbPool }
 
     /// Insert transcript metadata + all words in a single transaction.
-    func createWithWords(_ transcript: Transcript, words: [TranscriptWord]) throws -> Transcript {
+    package func createWithWords(_ transcript: Transcript, words: [TranscriptWord]) throws -> Transcript {
         try dbPool.write { db in
             var t = transcript
             try t.insert(db)
@@ -130,7 +136,7 @@ struct TranscriptRepository: Sendable {
     }
 
     /// Get all words for a transcript, ordered by position.
-    func getWords(transcriptId: Int64) throws -> [TranscriptWord] {
+    package func getWords(transcriptId: Int64) throws -> [TranscriptWord] {
         try dbPool.read { db in
             let records = try TranscriptWordRecord
                 .filter(Column("transcriptId") == transcriptId)
@@ -147,13 +153,13 @@ struct TranscriptRepository: Sendable {
         }
     }
 
-    func get(id: Int64) throws -> Transcript? {
+    package func get(id: Int64) throws -> Transcript? {
         try dbPool.read { db in
             try Transcript.fetchOne(db, key: id)
         }
     }
 
-    func getByAsset(assetId: Int64) throws -> Transcript? {
+    package func getByAsset(assetId: Int64) throws -> Transcript? {
         try dbPool.read { db in
             try Transcript
                 .filter(Column("assetId") == assetId)
@@ -162,7 +168,7 @@ struct TranscriptRepository: Sendable {
         }
     }
 
-    func getBySource(path: String) throws -> Transcript? {
+    package func getBySource(path: String) throws -> Transcript? {
         try dbPool.read { db in
             try Transcript
                 .filter(Column("sourcePath") == path)
@@ -171,7 +177,7 @@ struct TranscriptRepository: Sendable {
         }
     }
 
-    func search(query: String, limit: Int = 20) throws -> [Transcript] {
+    package func search(query: String, limit: Int = 20) throws -> [Transcript] {
         try dbPool.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT t.* FROM transcripts t
@@ -189,10 +195,12 @@ struct TranscriptRepository: Sendable {
 
 // MARK: - Render Repository
 
-struct RenderRepository: Sendable {
-    let dbPool: DatabasePool
+package struct RenderRepository: Sendable {
+    package let dbPool: DatabasePool
 
-    func create(projectId: Int64?, specJson: String, outputPath: String?, durationSeconds: Double?, fileSizeBytes: Int64?, status: String = "completed", errorMessage: String? = nil) throws -> Int64 {
+    package init(dbPool: DatabasePool) { self.dbPool = dbPool }
+
+    package func create(projectId: Int64?, specJson: String, outputPath: String?, durationSeconds: Double?, fileSizeBytes: Int64?, status: String = "completed", errorMessage: String? = nil) throws -> Int64 {
         try dbPool.write { db in
             try db.execute(sql: """
                 INSERT INTO renders (projectId, specJson, outputPath, durationSeconds, fileSizeBytes, status, errorMessage)
@@ -202,7 +210,7 @@ struct RenderRepository: Sendable {
         }
     }
 
-    func list(projectId: Int64? = nil, limit: Int = 50) throws -> [Row] {
+    package func list(projectId: Int64? = nil, limit: Int = 50) throws -> [Row] {
         try dbPool.read { db in
             if let projectId {
                 return try Row.fetchAll(db, sql: "SELECT * FROM renders WHERE projectId = ? ORDER BY createdAt DESC LIMIT ?", arguments: [projectId, limit])
@@ -214,10 +222,12 @@ struct RenderRepository: Sendable {
 
 // MARK: - Preset Repository
 
-struct PresetRepository: Sendable {
-    let dbPool: DatabasePool
+package struct PresetRepository: Sendable {
+    package let dbPool: DatabasePool
 
-    func save(name: String, type: String, configJson: String, description: String? = nil) throws -> Preset {
+    package init(dbPool: DatabasePool) { self.dbPool = dbPool }
+
+    package func save(name: String, type: String, configJson: String, description: String? = nil) throws -> Preset {
         try dbPool.write { db in
             // Upsert: if name exists, update it
             if var existing = try Preset.filter(Column("name") == name).fetchOne(db) {
@@ -234,13 +244,13 @@ struct PresetRepository: Sendable {
         }
     }
 
-    func get(name: String) throws -> Preset? {
+    package func get(name: String) throws -> Preset? {
         try dbPool.read { db in
             try Preset.filter(Column("name") == name).fetchOne(db)
         }
     }
 
-    func list(type: String? = nil) throws -> [Preset] {
+    package func list(type: String? = nil) throws -> [Preset] {
         try dbPool.read { db in
             if let type {
                 return try Preset.filter(Column("type") == type).fetchAll(db)
@@ -249,7 +259,7 @@ struct PresetRepository: Sendable {
         }
     }
 
-    func delete(name: String) throws -> Bool {
+    package func delete(name: String) throws -> Bool {
         try dbPool.write { db in
             try Preset.filter(Column("name") == name).deleteAll(db) > 0
         }
@@ -258,10 +268,12 @@ struct PresetRepository: Sendable {
 
 // MARK: - Visual Analysis Repository
 
-struct VisualAnalysisRepository: Sendable {
-    let dbPool: DatabasePool
+package struct VisualAnalysisRepository: Sendable {
+    package let dbPool: DatabasePool
 
-    func create(_ analysis: VisualAnalysis) throws -> VisualAnalysis {
+    package init(dbPool: DatabasePool) { self.dbPool = dbPool }
+
+    package func create(_ analysis: VisualAnalysis) throws -> VisualAnalysis {
         try dbPool.write { db in
             var a = analysis
             try a.insert(db)
@@ -269,7 +281,7 @@ struct VisualAnalysisRepository: Sendable {
         }
     }
 
-    func update(id: Int64, frameCount: Int? = nil, framesDir: String? = nil, status: String? = nil, sceneCount: Int? = nil) throws {
+    package func update(id: Int64, frameCount: Int? = nil, framesDir: String? = nil, status: String? = nil, sceneCount: Int? = nil) throws {
         try dbPool.write { db in
             guard var analysis = try VisualAnalysis.fetchOne(db, key: id) else { return }
             if let frameCount { analysis.frameCount = frameCount }
@@ -280,13 +292,13 @@ struct VisualAnalysisRepository: Sendable {
         }
     }
 
-    func get(id: Int64) throws -> VisualAnalysis? {
+    package func get(id: Int64) throws -> VisualAnalysis? {
         try dbPool.read { db in
             try VisualAnalysis.fetchOne(db, key: id)
         }
     }
 
-    func getScenes(analysisId: Int64) throws -> [VisualScene] {
+    package func getScenes(analysisId: Int64) throws -> [VisualScene] {
         try dbPool.read { db in
             try VisualScene
                 .filter(Column("analysisId") == analysisId)
@@ -295,7 +307,7 @@ struct VisualAnalysisRepository: Sendable {
         }
     }
 
-    func storeScenes(analysisId: Int64, scenes: [VisualScene]) throws {
+    package func storeScenes(analysisId: Int64, scenes: [VisualScene]) throws {
         try dbPool.write { db in
             for var scene in scenes {
                 try scene.insert(db)

@@ -365,23 +365,6 @@ final class CompositionBuilder: Sendable {
         // every audio track in the composition is accounted for.
         let remainingTrackIDs = Set(composition.tracks.map { $0.trackID })
 
-        // Apply overlay ducking: reduce main audio volume during overlay
-        if let overlays = spec.overlays {
-            for overlay in overlays {
-                guard let duckVolume = overlay.mainAudioVolume else { continue }
-                let overlayStart = CMTime(seconds: overlay.start, preferredTimescale: 600)
-                let overlayEnd = CMTime(seconds: overlay.end, preferredTimescale: 600)
-                let vol = Float(duckVolume)
-                if let audioParamsA, let audioTrackA, remainingTrackIDs.contains(audioTrackA.trackID) {
-                    audioParamsA.setVolume(vol, at: overlayStart)
-                    audioParamsA.setVolume(1.0, at: overlayEnd)
-                }
-                if let audioParamsB, let audioTrackB, remainingTrackIDs.contains(audioTrackB.trackID) {
-                    audioParamsB.setVolume(vol, at: overlayStart)
-                    audioParamsB.setVolume(1.0, at: overlayEnd)
-                }
-            }
-        }
 
         if let audioParamsA, let audioTrackA, remainingTrackIDs.contains(audioTrackA.trackID) {
             audioMixParams.append(audioParamsA)

@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-struct Transcript: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Identifiable {
-    var id: Int64?
+package struct Transcript: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Identifiable {
+    package var id: Int64?
     var assetId: Int64?
     var sourcePath: String
     var fullText: String
@@ -11,7 +11,7 @@ struct Transcript: Codable, Sendable, FetchableRecord, MutablePersistableRecord,
     var wordCount: Int?
     var createdAt: String
 
-    static let databaseTableName = "transcripts"
+    package static let databaseTableName = "transcripts"
 
     init(sourcePath: String, fullText: String, compactJson: String = "[]", durationSeconds: Double? = nil, wordCount: Int? = nil, assetId: Int64? = nil) {
         self.sourcePath = sourcePath
@@ -23,14 +23,14 @@ struct Transcript: Codable, Sendable, FetchableRecord, MutablePersistableRecord,
         self.createdAt = Project.timestamp()
     }
 
-    mutating func didInsert(_ inserted: InsertionSuccess) {
+    package mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
     }
 }
 
 // MARK: - Word record (stored in transcript_words table)
 
-struct TranscriptWordRecord: Codable, Sendable, FetchableRecord, MutablePersistableRecord {
+package struct TranscriptWordRecord: Codable, Sendable, FetchableRecord, MutablePersistableRecord {
     var id: Int64?
     var transcriptId: Int64
     var wordIndex: Int
@@ -39,22 +39,22 @@ struct TranscriptWordRecord: Codable, Sendable, FetchableRecord, MutablePersista
     var endTime: Double
     var confidence: Double?
 
-    static let databaseTableName = "transcript_words"
+    package static let databaseTableName = "transcript_words"
 
-    mutating func didInsert(_ inserted: InsertionSuccess) {
+    package mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
     }
 }
 
 // MARK: - In-memory structures (used by rendering pipeline and agent responses)
 
-struct TranscriptData: Codable, Sendable {
+package struct TranscriptData: Codable, Sendable {
     let words: [TranscriptWord]
     let fullText: String
     let durationSeconds: Double
 }
 
-struct TranscriptWord: Codable, Sendable {
+package struct TranscriptWord: Codable, Sendable {
     let word: String
     let startTime: Double
     let endTime: Double

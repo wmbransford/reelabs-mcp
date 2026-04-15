@@ -1,8 +1,8 @@
 import Foundation
 import MCP
 
-enum ValidateTool {
-    static let tool = Tool(
+package enum ValidateTool {
+    package static let tool = Tool(
         name: "reelabs_validate",
         description: "Pre-flight check on a RenderSpec without rendering. Validates sources exist, segments are within bounds, transitions fit, output directory is writable. Returns issues list.",
         inputSchema: .object([
@@ -17,7 +17,7 @@ enum ValidateTool {
         ])
     )
 
-    static func handle(arguments: [String: Value]?, transcriptRepo: TranscriptRepository) async -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, transcriptRepo: TranscriptRepository) async -> CallTool.Result {
         guard let specValue = arguments?["spec"] else {
             return .init(content: [.text(text: "Missing required argument: spec", annotations: nil, _meta: nil)], isError: true)
         }

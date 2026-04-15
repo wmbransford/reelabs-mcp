@@ -2,8 +2,8 @@ import Foundation
 import MCP
 import GRDB
 
-enum SearchTool {
-    static let tool = Tool(
+package enum SearchTool {
+    package static let tool = Tool(
         name: "reelabs_search",
         description: "Full-text search across projects, assets, transcripts, and renders. Uses FTS5 for transcript search with BM25 ranking.",
         inputSchema: .object([
@@ -44,7 +44,7 @@ enum SearchTool {
         return words.map { "\"\($0)\"" }.joined(separator: " ")
     }
 
-    static func handle(arguments: [String: Value]?, dbPool: DatabasePool) -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, dbPool: DatabasePool) -> CallTool.Result {
         guard let query = arguments?["query"]?.stringValue, !query.isEmpty else {
             return .init(content: [.text(text: "Missing required argument: query", annotations: nil, _meta: nil)], isError: true)
         }

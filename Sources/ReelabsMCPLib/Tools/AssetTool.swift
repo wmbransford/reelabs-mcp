@@ -1,8 +1,8 @@
 import Foundation
 import MCP
 
-enum AssetTool {
-    static let tool = Tool(
+package enum AssetTool {
+    package static let tool = Tool(
         name: "reelabs_asset",
         description: "Manage project assets. Actions: add (project_id, path — auto-probes metadata), list (project_id), get (id), tag (id, tags[]), delete (id).",
         inputSchema: .object([
@@ -35,7 +35,7 @@ enum AssetTool {
         ])
     )
 
-    static func handle(arguments: [String: Value]?, assetRepo: AssetRepository) async -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, assetRepo: AssetRepository) async -> CallTool.Result {
         guard let action = arguments?["action"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: action", annotations: nil, _meta: nil)], isError: true)
         }

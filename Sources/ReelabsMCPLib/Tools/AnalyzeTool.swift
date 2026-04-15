@@ -2,8 +2,8 @@ import Foundation
 import MCP
 import AVFoundation
 
-enum AnalyzeTool {
-    static let tool = Tool(
+package enum AnalyzeTool {
+    package static let tool = Tool(
         name: "reelabs_analyze",
         description: "Analyze video visually. Actions: extract (path, sample_fps? — extracts frames to disk), store (analysis_id, scenes[] — persist sub-agent scene analysis), get (id — retrieve analysis + scenes).",
         inputSchema: .object([
@@ -53,7 +53,7 @@ enum AnalyzeTool {
         ])
     )
 
-    static func handle(arguments: [String: Value]?, analysisRepo: VisualAnalysisRepository) async -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, analysisRepo: VisualAnalysisRepository) async -> CallTool.Result {
         guard let action = arguments?["action"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: action", annotations: nil, _meta: nil)], isError: true)
         }

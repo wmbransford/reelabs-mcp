@@ -12,14 +12,27 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
     ],
     targets: [
-        .executableTarget(
-            name: "ReelabsMCP",
+        .target(
+            name: "ReelabsMCPLib",
             dependencies: [
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Sources/ReelabsMCPLib",
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+        .executableTarget(
+            name: "ReelabsMCP",
+            dependencies: [
+                "ReelabsMCPLib",
+                .product(name: "MCP", package: "swift-sdk"),
+                .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "Logging", package: "swift-log"),
             ],
             path: "Sources/ReelabsMCP",
@@ -29,7 +42,7 @@ let package = Package(
         ),
         .testTarget(
             name: "ReelabsMCPTests",
-            dependencies: ["ReelabsMCP"],
+            dependencies: ["ReelabsMCPLib"],
             path: "Tests/ReelabsMCPTests"
         ),
     ]

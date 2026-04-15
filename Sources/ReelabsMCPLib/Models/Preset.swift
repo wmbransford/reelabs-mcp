@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-struct Preset: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Identifiable {
-    var id: Int64?
+package struct Preset: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Identifiable {
+    package var id: Int64?
     var name: String
     var type: String
     var configJson: String
@@ -10,7 +10,7 @@ struct Preset: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Ide
     var createdAt: String
     var updatedAt: String
 
-    static let databaseTableName = "presets"
+    package static let databaseTableName = "presets"
 
     init(name: String, type: String, configJson: String, description: String? = nil) {
         self.name = name
@@ -22,7 +22,7 @@ struct Preset: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Ide
         self.updatedAt = now
     }
 
-    mutating func didInsert(_ inserted: InsertionSuccess) {
+    package mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
     }
 }

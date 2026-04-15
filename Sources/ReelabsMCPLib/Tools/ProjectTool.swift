@@ -1,8 +1,8 @@
 import Foundation
 import MCP
 
-enum ProjectTool {
-    static let tool = Tool(
+package enum ProjectTool {
+    package static let tool = Tool(
         name: "reelabs_project",
         description: "Manage projects. Actions: create (name, description?), list (status?), get (id), archive (id), delete (id).",
         inputSchema: .object([
@@ -34,7 +34,7 @@ enum ProjectTool {
         ])
     )
 
-    static func handle(arguments: [String: Value]?, repo: ProjectRepository) -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, repo: ProjectRepository) -> CallTool.Result {
         guard let action = arguments?["action"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: action", annotations: nil, _meta: nil)], isError: true)
         }

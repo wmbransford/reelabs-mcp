@@ -1,8 +1,8 @@
 import Foundation
 import MCP
 
-enum RenderTool {
-    static let tool = Tool(
+package enum RenderTool {
+    package static let tool = Tool(
         name: "reelabs_render",
         description: "Render a video from a declarative RenderSpec. Handles trimming, speed changes, transitions, captions, audio mixing, aspect ratio, and overlays. Pass the full spec as JSON.",
         inputSchema: .object([
@@ -21,7 +21,7 @@ enum RenderTool {
         ])
     )
 
-    static func handle(arguments: [String: Value]?, renderRepo: RenderRepository, transcriptRepo: TranscriptRepository, presetRepo: PresetRepository) async -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, renderRepo: RenderRepository, transcriptRepo: TranscriptRepository, presetRepo: PresetRepository) async -> CallTool.Result {
         guard let specValue = arguments?["spec"] else {
             return .init(content: [.text(text: "Missing required argument: spec", annotations: nil, _meta: nil)], isError: true)
         }
@@ -226,12 +226,20 @@ enum RenderTool {
 /// Remap transcript word timestamps from source-video time to composition time.
 /// Without this, captions are misaligned in multi-segment edits because the
 /// transcript stores times relative to the original source, not the cut.
-private func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) -> TranscriptData {
+func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) -> TranscriptData {
     var mappings: [(sourceStart: Double, sourceEnd: Double, compositionStart: Double, speed: Double)] = []
     var compositionTime = 0.0
-    for seg in segments {
+    for (index, seg) in segments.enumerated() {
         let speed = seg.speed ?? 1.0
         let duration = (seg.end - seg.start) / speed
+
+        // Match CompositionBuilder.swift pullback logic:
+        // Incoming crossfade pulls the insertion time back to create the overlap region.
+        if index > 0, let transition = seg.transition, transition.type == .crossfade {
+            let clamped = min(transition.duration, duration)
+            compositionTime -= clamped
+        }
+
         mappings.append((seg.start, seg.end, compositionTime, speed))
         compositionTime += duration
     }
@@ -276,7 +284,7 @@ private func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) ->
 
 /// Remap words from multiple source transcripts into a single composition-time TranscriptData.
 /// Each segment pulls words from the transcript belonging to its source.
-private func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], segments: [SegmentSpec]) -> TranscriptData {
+func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], segments: [SegmentSpec]) -> TranscriptData {
     var compositionTime = 0.0
     var remapped: [TranscriptWord] = []
     var fullTextParts: [String] = []
@@ -284,6 +292,12 @@ private func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptW
     for (segIdx, seg) in segments.enumerated() {
         let speed = seg.speed ?? 1.0
         let segDuration = (seg.end - seg.start) / speed
+
+        // Match CompositionBuilder.swift pullback logic
+        if segIdx > 0, let transition = seg.transition, transition.type == .crossfade {
+            let clamped = min(transition.duration, segDuration)
+            compositionTime -= clamped
+        }
 
         guard let words = sourceTranscripts[seg.sourceId] else {
             captionLog("[remapMultiSource] seg[\(segIdx)]: no transcript for source '\(seg.sourceId)', skipping")

@@ -1,16 +1,16 @@
 import Foundation
 
-struct ServerConfig: Sendable {
-    let chirpProjectId: String
-    let chirpLocation: String
-    let chirpModel: String
-    let serviceAccountPath: String?
-    let databasePath: String?
-    let gcsBucket: String
-    let httpPort: Int?
-    let httpHost: String?
+package struct ServerConfig: Sendable {
+    package let chirpProjectId: String
+    package let chirpLocation: String
+    package let chirpModel: String
+    package let serviceAccountPath: String?
+    package let databasePath: String?
+    package let gcsBucket: String
+    package let httpPort: Int?
+    package let httpHost: String?
 
-    static func load() -> ServerConfig {
+    package static func load() -> ServerConfig {
         // Resolve config.json relative to the binary or current directory
         let configPaths = [
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("config.json"),

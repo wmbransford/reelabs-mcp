@@ -2,6 +2,7 @@ import Foundation
 import Logging
 import MCP
 import GRDB
+import ReelabsMCPLib
 
 // --- PID file: kill any stale server before starting ---
 let pidDir = try FileManager.default.url(

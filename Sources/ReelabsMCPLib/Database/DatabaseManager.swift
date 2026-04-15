@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-final class DatabaseManager: Sendable {
-    let dbPool: DatabasePool
+package final class DatabaseManager: Sendable {
+    package let dbPool: DatabasePool
 
     static var databaseURL: URL {
         let appSupport = try! FileManager.default.url(
@@ -16,7 +16,7 @@ final class DatabaseManager: Sendable {
             .appendingPathComponent("reelabs.sqlite")
     }
 
-    init(path: String? = nil) throws {
+    package init(path: String? = nil) throws {
         let url = path.map { URL(fileURLWithPath: $0) } ?? Self.databaseURL
         let directoryURL = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)

@@ -1,8 +1,8 @@
 import Foundation
 import MCP
 
-enum ProbeTool {
-    static let tool = Tool(
+package enum ProbeTool {
+    package static let tool = Tool(
         name: "reelabs_probe",
         description: "Inspect a video file — returns duration, resolution, fps, codecs, audio tracks, file size. Use this before adding assets or building render specs.",
         inputSchema: .object([
@@ -17,7 +17,7 @@ enum ProbeTool {
         ])
     )
 
-    static func handle(arguments: [String: Value]?) async -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?) async -> CallTool.Result {
         guard let path = arguments?["path"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: path", annotations: nil, _meta: nil)], isError: true)
         }

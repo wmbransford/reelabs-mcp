@@ -7,14 +7,14 @@ import MCP
 
 /// NIO-based HTTP server for Streamable HTTP MCP transport.
 /// Adapted from the swift-sdk conformance server (MCPConformance/Server/HTTPApp.swift).
-actor HTTPServer {
-    struct Configuration: Sendable {
+package actor HTTPServer {
+    package struct Configuration: Sendable {
         var host: String
         var port: Int
         var endpoint: String
         var sessionTimeout: TimeInterval
 
-        init(
+        package init(
             host: String = "127.0.0.1",
             port: Int = 52849,
             endpoint: String = "/mcp",
@@ -27,7 +27,7 @@ actor HTTPServer {
         }
     }
 
-    typealias ServerFactory = @Sendable (String, StatefulHTTPServerTransport) async throws -> Server
+    package typealias ServerFactory = @Sendable (String, StatefulHTTPServerTransport) async throws -> Server
 
     private let configuration: Configuration
     private let serverFactory: ServerFactory
@@ -43,7 +43,7 @@ actor HTTPServer {
         var lastAccessedAt: Date
     }
 
-    init(
+    package init(
         configuration: Configuration = Configuration(),
         serverFactory: @escaping ServerFactory,
         logger: Logger? = nil
@@ -55,7 +55,7 @@ actor HTTPServer {
 
     // MARK: - Lifecycle
 
-    func start() async throws {
+    package func start() async throws {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
         let bootstrap = ServerBootstrap(group: group)

@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - RenderSpec
 
-struct RenderSpec: Codable, Sendable {
+package struct RenderSpec: Codable, Sendable {
     let sources: [Source]
     let segments: [SegmentSpec]
     let captions: CaptionConfig?
@@ -14,7 +14,7 @@ struct RenderSpec: Codable, Sendable {
     let fps: Double?
     let outputPath: String
 
-    struct Source: Codable, Sendable {
+    package struct Source: Codable, Sendable {
         let id: String
         let path: String
         let transcriptId: Int?
@@ -24,11 +24,11 @@ struct RenderSpec: Codable, Sendable {
 // MARK: - Resolution
 
 /// Accepts either a preset string ("720p", "1080p", "4k") or an explicit {width, height} object.
-enum Resolution: Codable, Sendable {
+package enum Resolution: Codable, Sendable {
     case preset(ResolutionPreset)
     case custom(width: Int, height: Int)
 
-    enum ResolutionPreset: String, Codable, Sendable {
+    package enum ResolutionPreset: String, Codable, Sendable {
         case _720p = "720p"
         case _1080p = "1080p"
         case _4k = "4k"
@@ -57,7 +57,7 @@ enum Resolution: Codable, Sendable {
         }
     }
 
-    init(from decoder: Decoder) throws {
+    package init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         // Try string preset first
         if let str = try? container.decode(String.self),
@@ -70,7 +70,7 @@ enum Resolution: Codable, Sendable {
         self = .custom(width: obj.width, height: obj.height)
     }
 
-    func encode(to encoder: Encoder) throws {
+    package func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case .preset(let p):
@@ -88,7 +88,7 @@ enum Resolution: Codable, Sendable {
 
 // MARK: - Segment
 
-struct SegmentSpec: Codable, Sendable {
+package struct SegmentSpec: Codable, Sendable {
     let sourceId: String
     let start: Double
     let end: Double
@@ -101,7 +101,7 @@ struct SegmentSpec: Codable, Sendable {
 
 // MARK: - Keyframe
 
-struct Keyframe: Codable, Sendable {
+package struct Keyframe: Codable, Sendable {
     let time: Double
     let scale: Double?
     let panX: Double?
@@ -110,7 +110,7 @@ struct Keyframe: Codable, Sendable {
 
 // MARK: - Transform
 
-struct TransformSpec: Codable, Sendable {
+package struct TransformSpec: Codable, Sendable {
     let scale: Double?
     let panX: Double?
     let panY: Double?
@@ -122,18 +122,18 @@ struct TransformSpec: Codable, Sendable {
 
 // MARK: - Transition
 
-struct Transition: Codable, Sendable {
+package struct Transition: Codable, Sendable {
     let type: TransitionType
     let duration: Double
 
-    enum TransitionType: String, Codable, Sendable {
+    package enum TransitionType: String, Codable, Sendable {
         case crossfade
     }
 }
 
 // MARK: - Caption Config
 
-struct CaptionConfig: Codable, Sendable {
+package struct CaptionConfig: Codable, Sendable {
     let preset: String?
     let transcriptId: Int?
     let fontFamily: String?
@@ -150,7 +150,7 @@ struct CaptionConfig: Codable, Sendable {
 
 // MARK: - Audio Config
 
-struct AudioConfig: Codable, Sendable {
+package struct AudioConfig: Codable, Sendable {
     let musicPath: String?
     let musicVolume: Double?
     let normalizeAudio: Bool?
@@ -160,12 +160,12 @@ struct AudioConfig: Codable, Sendable {
 
 // MARK: - Quality Config
 
-struct QualityConfig: Codable, Sendable {
+package struct QualityConfig: Codable, Sendable {
     let codec: Codec?
     let bitrate: Int?
     let quality: Double?
 
-    enum Codec: String, Codable, Sendable {
+    package enum Codec: String, Codable, Sendable {
         case h264
         case hevc
     }
@@ -173,7 +173,7 @@ struct QualityConfig: Codable, Sendable {
 
 // MARK: - Overlay
 
-struct Overlay: Codable, Sendable {
+package struct Overlay: Codable, Sendable {
     let sourceId: String
     let start: Double       // composition timeline: when overlay appears
     let end: Double         // composition timeline: when overlay disappears
@@ -185,14 +185,13 @@ struct Overlay: Codable, Sendable {
     let sourceStart: Double? // offset into overlay source file, default 0
     let zIndex: Int?        // stacking order, default 0 (higher = on top)
     let audio: Double?      // overlay audio volume 0.0-1.0, default 0 (muted)
-    let mainAudioVolume: Double? // main track volume during overlay 0.0-1.0, default nil (unchanged)
     let cornerRadius: Double? // 0.0 (sharp) to 1.0 (circle/pill)
     let crop: CropRect?     // sub-region of source video (0-1 fractions)
 }
 
 // MARK: - Crop Rect
 
-struct CropRect: Codable, Sendable {
+package struct CropRect: Codable, Sendable {
     let x: Double       // 0.0-1.0 fraction of source width
     let y: Double       // 0.0-1.0 fraction of source height
     let width: Double   // 0.0-1.0 fraction of source width
@@ -201,7 +200,7 @@ struct CropRect: Codable, Sendable {
 
 // MARK: - Aspect Ratio
 
-enum AspectRatio: String, Codable, Sendable {
+package enum AspectRatio: String, Codable, Sendable {
     case landscape = "16:9"
     case portrait = "9:16"
     case square = "1:1"

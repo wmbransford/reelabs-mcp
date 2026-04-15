@@ -2,8 +2,8 @@ import AVFoundation
 import Foundation
 import MCP
 
-enum TranscribeTool {
-    static let tool = Tool(
+package enum TranscribeTool {
+    package static let tool = Tool(
         name: "reelabs_transcribe",
         description: "Transcribe a video/audio file using Google Cloud Speech-to-Text (Chirp). Returns word-level timestamps. Stores result in database for caption rendering and search. Short audio (<= 60s) uses sync API; longer audio uploads to GCS and uses batch API.",
         inputSchema: .object([
@@ -26,7 +26,7 @@ enum TranscribeTool {
         ])
     )
 
-    static func handle(arguments: [String: Value]?, transcriptRepo: TranscriptRepository, config: ServerConfig) async -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, transcriptRepo: TranscriptRepository, config: ServerConfig) async -> CallTool.Result {
         guard let path = arguments?["path"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: path", annotations: nil, _meta: nil)], isError: true)
         }

@@ -1,8 +1,8 @@
 import Foundation
 import GRDB
 
-struct VisualAnalysis: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Identifiable {
-    var id: Int64?
+package struct VisualAnalysis: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Identifiable {
+    package var id: Int64?
     var assetId: Int64?
     var sourcePath: String
     var status: String
@@ -13,7 +13,7 @@ struct VisualAnalysis: Codable, Sendable, FetchableRecord, MutablePersistableRec
     var framesDir: String
     var createdAt: String
 
-    static let databaseTableName = "visual_analyses"
+    package static let databaseTableName = "visual_analyses"
 
     init(sourcePath: String, sampleFps: Double, assetId: Int64? = nil) {
         self.sourcePath = sourcePath
@@ -27,13 +27,13 @@ struct VisualAnalysis: Codable, Sendable, FetchableRecord, MutablePersistableRec
         self.createdAt = Project.timestamp()
     }
 
-    mutating func didInsert(_ inserted: InsertionSuccess) {
+    package mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
     }
 }
 
-struct VisualScene: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Identifiable {
-    var id: Int64?
+package struct VisualScene: Codable, Sendable, FetchableRecord, MutablePersistableRecord, Identifiable {
+    package var id: Int64?
     var analysisId: Int64
     var sceneIndex: Int
     var startTime: Double
@@ -43,7 +43,7 @@ struct VisualScene: Codable, Sendable, FetchableRecord, MutablePersistableRecord
     var sceneType: String?
     var createdAt: String
 
-    static let databaseTableName = "visual_scenes"
+    package static let databaseTableName = "visual_scenes"
 
     init(analysisId: Int64, sceneIndex: Int, startTime: Double, endTime: Double, description: String, tags: String? = nil, sceneType: String? = nil) {
         self.analysisId = analysisId
@@ -56,7 +56,7 @@ struct VisualScene: Codable, Sendable, FetchableRecord, MutablePersistableRecord
         self.createdAt = Project.timestamp()
     }
 
-    mutating func didInsert(_ inserted: InsertionSuccess) {
+    package mutating func didInsert(_ inserted: InsertionSuccess) {
         id = inserted.rowID
     }
 }

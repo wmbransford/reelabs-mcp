@@ -1,7 +1,7 @@
 import Foundation
 
-enum DefaultPresets {
-    static func seed(repo: PresetRepository) throws {
+package enum DefaultPresets {
+    package static func seed(repo: PresetRepository) throws {
         // Always upsert defaults to keep presets current
 
         // Caption presets

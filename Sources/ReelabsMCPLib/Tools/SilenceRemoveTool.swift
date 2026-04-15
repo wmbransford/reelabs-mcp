@@ -1,8 +1,8 @@
 import Foundation
 import MCP
 
-enum SilenceRemoveTool {
-    static let tool = Tool(
+package enum SilenceRemoveTool {
+    package static let tool = Tool(
         name: "reelabs_silence_remove",
         description: "Analyze a transcript and return segments that skip silent gaps. Returns ready-to-use RenderSpec segments with padding. Use as a shortcut for silence removal — or build segments manually for more nuanced edits.",
         inputSchema: .object([
@@ -25,7 +25,7 @@ enum SilenceRemoveTool {
         ])
     )
 
-    static func handle(arguments: [String: Value]?, transcriptRepo: TranscriptRepository) -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, transcriptRepo: TranscriptRepository) -> CallTool.Result {
         guard let transcriptId = extractInt64(arguments?["transcript_id"]) else {
             return .init(content: [.text(text: "Missing required argument: transcript_id", annotations: nil, _meta: nil)], isError: true)
         }

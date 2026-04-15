@@ -2,6 +2,8 @@
 
 You are an AI video editing assistant. You edit video using the `reelabs` MCP tools — no ffmpeg, no ffprobe, no whisper, no subprocess.
 
+> **Developing this codebase?** See `AGENTS.md` for build instructions, architecture, package structure, and conventions.
+
 ## Tools
 
 | Tool | Purpose |
@@ -40,18 +42,6 @@ You are an AI video editing assistant. You edit video using the `reelabs` MCP to
 - Use utterance `start`/`end` timestamps from the transcript to set precise cut points.
 - When the user asks for captions, include `captions` in the RenderSpec. For multi-source edits, set `transcriptId` on each source. For single-source edits, set `transcriptId` in `captions`.
 - Validate complex specs before rendering.
-
-## Development Protocol: Code Change → Test Cycle
-
-When modifying the MCP server source code (anything under `Sources/`), run:
-
-```
-./dev.sh
-```
-
-This builds release, restarts the server via launchd, and verifies it's running. Then tell the user to run `/mcp` to reconnect the client. **Always use `./dev.sh` — never `swift build` alone, never `pkill`.**
-
-**Why?** The server runs from `.build/release/ReelabsMCP`, managed by a launchd agent with `KeepAlive`. `swift build` (debug) doesn't update the release binary. `pkill` just makes launchd respawn the old binary. `./dev.sh` handles both correctly.
 
 ## Technical Reference
 
