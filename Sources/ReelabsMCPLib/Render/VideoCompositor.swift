@@ -52,6 +52,8 @@ final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
 
     func startRequest(_ request: AVAsynchronousVideoCompositionRequest) {
         autoreleasepool {
+            let frameStart = CFAbsoluteTimeGetCurrent()
+
             guard let instruction = request.videoCompositionInstruction as? CompositorInstruction else {
                 captionLog("[Compositor] ERROR: Unknown instruction type (not CompositorInstruction)")
                 request.finish(with: NSError(domain: "VideoCompositor", code: -1,
@@ -283,6 +285,8 @@ final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
 
             ciContext.render(canvas, to: outputBuffer)
             request.finish(withComposedVideoFrame: outputBuffer)
+
+            FrameStats.shared.record(elapsed: CFAbsoluteTimeGetCurrent() - frameStart)
         }
     }
 

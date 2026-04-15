@@ -161,10 +161,20 @@ final class ChirpClient: Sendable {
 
         for (index, chunk) in chunks.enumerated() {
             let offset = chunk.offset
+            let chunkDur = chunk.transcript.durationSeconds > 0
+                ? chunk.transcript.durationSeconds
+                : maxChunkSeconds
 
             for word in chunk.transcript.words {
+                // Discard words with startTime past the chunk boundary (garbled)
+                guard word.startTime <= chunkDur + 1.0 else { continue }
+
+                // Clamp endTime to chunk boundary
+                let clampedEnd = min(word.endTime, chunkDur)
+                let safeEnd = clampedEnd > word.startTime ? clampedEnd : word.startTime + 0.3
+
                 let absoluteStart = word.startTime + offset
-                let absoluteEnd = word.endTime + offset
+                let absoluteEnd = safeEnd + offset
 
                 // Skip words in overlap region already covered by previous chunk
                 if index > 0 && absoluteStart < prevChunkEndTime {
@@ -179,8 +189,9 @@ final class ChirpClient: Sendable {
                 ))
             }
 
-            if let lastWord = chunk.transcript.words.last {
-                prevChunkEndTime = lastWord.endTime + offset
+            // Use the clamped last accepted word for overlap tracking
+            if let lastAccepted = allWords.last {
+                prevChunkEndTime = lastAccepted.endTime
             }
         }
 

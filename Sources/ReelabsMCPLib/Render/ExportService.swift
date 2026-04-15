@@ -35,7 +35,8 @@ final class ExportService: Sendable {
         transcriptData: TranscriptData? = nil,
         renderSize: CGSize,
         quality: QualityConfig? = nil,
-        captionExclusionZones: [ClosedRange<Double>] = []
+        captionExclusionZones: [ClosedRange<Double>] = [],
+        profiler: RenderProfiler? = nil
     ) async throws -> ExportResult {
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try FileManager.default.removeItem(at: outputURL)
@@ -171,7 +172,8 @@ final class ExportService: Sendable {
                         transcriptData: transcriptData,
                         renderSize: renderSize,
                         quality: quality,
-                        captionExclusionZones: captionExclusionZones
+                        captionExclusionZones: captionExclusionZones,
+                        profiler: profiler
                     )
                 }
 
@@ -182,6 +184,7 @@ final class ExportService: Sendable {
                 let totalDuration = CMTimeGetSeconds(composition.duration)
                 captionLog("[ReeLabs Caption] videoTracks=\(videoTracks.count), totalDuration=\(totalDuration)s")
 
+                let captionBuildStart = CFAbsoluteTimeGetCurrent()
                 let captionLayer = CaptionLayer.createOverlay(
                     transcriptData: transcriptData,
                     config: captionConfig,
@@ -189,6 +192,7 @@ final class ExportService: Sendable {
                     totalDuration: totalDuration,
                     exclusionZones: captionExclusionZones
                 )
+                profiler?.record("caption_layer_build", seconds: CFAbsoluteTimeGetCurrent() - captionBuildStart)
                 captionSublayerCount = captionLayer.sublayers?.count ?? 0
                 captionLog("[ReeLabs Caption] captionLayer sublayers=\(captionSublayerCount)")
 
@@ -249,7 +253,9 @@ final class ExportService: Sendable {
         }
 
         do {
+            let encodeStart = CFAbsoluteTimeGetCurrent()
             try await session.export(to: outputURL, as: .mp4)
+            profiler?.record("export_encode", seconds: CFAbsoluteTimeGetCurrent() - encodeStart)
         } catch {
             let nsError = error as NSError
             diag.append("=== EXPORT FAILED ===")
@@ -298,7 +304,8 @@ final class ExportService: Sendable {
         transcriptData: TranscriptData,
         renderSize: CGSize,
         quality: QualityConfig?,
-        captionExclusionZones: [ClosedRange<Double>] = []
+        captionExclusionZones: [ClosedRange<Double>] = [],
+        profiler: RenderProfiler? = nil
     ) async throws -> ExportResult {
         let codec = quality?.codec ?? .h264
         let preset = Self.exportPreset(for: renderSize, codec: codec)
@@ -325,6 +332,7 @@ final class ExportService: Sendable {
         // with error -11841. AVAssetReader+Writer bypasses this preset validation.
         captionLog("[TwoPass] === PASS 1 START (reader/writer) === temp=\(tempURL.lastPathComponent)")
 
+        let pass1Start = CFAbsoluteTimeGetCurrent()
         try await readerWriterExport(
             composition: composition,
             videoComposition: videoComposition,
@@ -333,6 +341,7 @@ final class ExportService: Sendable {
             renderSize: renderSize,
             quality: quality
         )
+        profiler?.record("pass1_reader_writer", seconds: CFAbsoluteTimeGetCurrent() - pass1Start)
         captionLog("[TwoPass] Pass 1 complete")
 
         // === PASS 2: Caption burn-in via animationTool ===
@@ -371,6 +380,7 @@ final class ExportService: Sendable {
         captionLog("[TwoPass] Pass 2 composition: duration=\(round(totalDuration * 100) / 100)s audio=\(srcAudioTracks.count)")
 
         // Build caption layer hierarchy
+        let captionBuildStart = CFAbsoluteTimeGetCurrent()
         let captionLayer = CaptionLayer.createOverlay(
             transcriptData: transcriptData,
             config: captionConfig,
@@ -378,6 +388,7 @@ final class ExportService: Sendable {
             totalDuration: totalDuration,
             exclusionZones: captionExclusionZones
         )
+        profiler?.record("caption_layer_build", seconds: CFAbsoluteTimeGetCurrent() - captionBuildStart)
         let captionSublayerCount = captionLayer.sublayers?.count ?? 0
         captionLog("[TwoPass] Caption layer: sublayers=\(captionSublayerCount)")
 
@@ -429,7 +440,9 @@ final class ExportService: Sendable {
         }
 
         do {
+            let pass2Start = CFAbsoluteTimeGetCurrent()
             try await pass2Session.export(to: outputURL, as: .mp4)
+            profiler?.record("pass2_caption_export", seconds: CFAbsoluteTimeGetCurrent() - pass2Start)
         } catch {
             let nsError = error as NSError
             throw ExportError.exportFailed(
@@ -599,6 +612,7 @@ final class ExportService: Sendable {
 
         // Process video and audio concurrently
         captionLog("[ReaderWriter] Beginning sample transfer...")
+        let transferStart = CFAbsoluteTimeGetCurrent()
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 await self.transferSamples(from: videoOutput, to: videoInput)
@@ -610,7 +624,7 @@ final class ExportService: Sendable {
             }
             try await group.waitForAll()
         }
-        captionLog("[ReaderWriter] Sample transfer complete. Reader status=\(reader.status.rawValue) Writer status=\(writer.status.rawValue)")
+        captionLog("[ReaderWriter] Sample transfer complete (\(round((CFAbsoluteTimeGetCurrent() - transferStart) * 100) / 100)s). Reader status=\(reader.status.rawValue) Writer status=\(writer.status.rawValue)")
 
         // Finalize
         if reader.status == .failed {

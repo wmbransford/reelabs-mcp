@@ -44,6 +44,8 @@ package enum RenderTool {
             // Build composition and render
             let builder = CompositionBuilder()
             let exportService = ExportService()
+            let profiler = RenderProfiler()
+            FrameStats.shared.reset()
 
             // Determine caption mode: per-source, legacy single-transcript, or error
             let hasPerSourceTranscripts = spec.sources.contains { $0.transcriptId != nil }
@@ -139,20 +141,26 @@ package enum RenderTool {
             let captionConfigForRender = resolvedCaptionConfig
             let transcriptDataForRender = transcriptData
             let (result, exportResult) = try await RenderQueue.shared.enqueue {
-                let result = try await builder.build(spec: spec)
-                let exportResult = try await exportService.export(
-                    composition: result.composition,
-                    videoComposition: result.videoComposition,
-                    audioMix: result.audioMix,
-                    outputURL: outputURL,
-                    captionConfig: captionConfigForRender,
-                    transcriptData: transcriptDataForRender,
-                    renderSize: result.renderSize,
-                    quality: spec.quality,
-                    captionExclusionZones: captionExclusionZones
-                )
+                let result = try await profiler.measure("composition_build") {
+                    try await builder.build(spec: spec)
+                }
+                let exportResult = try await profiler.measure("export_total") {
+                    try await exportService.export(
+                        composition: result.composition,
+                        videoComposition: result.videoComposition,
+                        audioMix: result.audioMix,
+                        outputURL: outputURL,
+                        captionConfig: captionConfigForRender,
+                        transcriptData: transcriptDataForRender,
+                        renderSize: result.renderSize,
+                        quality: spec.quality,
+                        captionExclusionZones: captionExclusionZones,
+                        profiler: profiler
+                    )
+                }
                 return (result, exportResult)
             }
+            profiler.logSummary()
 
             // Fail loudly if captions were requested but not applied
             if spec.captions != nil && !exportResult.captionsApplied {
@@ -220,7 +228,8 @@ package enum RenderTool {
                 "codec": codec,
                 "resolution": "\(actualWidth)x\(actualHeight)",
                 "fps": result.fps,
-                "aspect_ratio": aspectLabel
+                "aspect_ratio": aspectLabel,
+                "timing": profiler.responseTiming()
             ]
             let responseData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
             let text = String(data: responseData, encoding: .utf8) ?? "{}"

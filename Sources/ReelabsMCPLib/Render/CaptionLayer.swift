@@ -50,11 +50,14 @@ enum CaptionLayer {
 
         let maxWidth = videoSize.width * 0.9
 
-        for group in groups {
+        for (groupIdx, group) in groups.enumerated() {
             autoreleasepool {
                 guard let firstWord = group.first, let lastWord = group.last else { return }
                 let startSec = firstWord.startTime
-                let endSec = min(lastWord.endTime, totalDuration)
+                // Clamp end to next group's start to prevent visual overlap
+                let nextGroupStart = (groupIdx + 1 < groups.count) ? groups[groupIdx + 1].first?.startTime : nil
+                let rawEnd = min(lastWord.endTime, totalDuration)
+                let endSec = nextGroupStart.map { min(rawEnd, $0) } ?? rawEnd
                 guard endSec > startSec else { return }
 
                 // Skip groups that overlap with exclusion zones (e.g. overlay time ranges)
@@ -141,15 +144,16 @@ enum CaptionLayer {
                             addVisibilityAnimation(to: baseLayer, startFrac: groupStartFrac, endFrac: groupEndFrac, totalDuration: totalDuration)
                             parentLayer.addSublayer(baseLayer)
 
-                            // Highlight color layer — visible only during this word's time
+                            // Highlight color layer — visible only during this word's time,
+                            // clamped to the group's visibility window
                             if let hlImage = r.hlImage {
                                 let hlLayer = CALayer()
                                 hlLayer.frame = wordFrame
                                 hlLayer.contents = hlImage
-                                let wordStart = max(r.wordData.startTime, 0)
-                                let wordEnd = max(min(r.wordData.endTime, totalDuration), wordStart + 0.01)
-                                let wordStartFrac = max(wordStart / totalDuration, 0)
-                                let wordEndFrac = min(max(wordEnd / totalDuration, wordStartFrac + 0.0001), 1.0)
+                                let wordStart = max(r.wordData.startTime, startSec)
+                                let wordEnd = max(min(r.wordData.endTime, endSec), wordStart + 0.01)
+                                let wordStartFrac = max(wordStart / totalDuration, groupStartFrac)
+                                let wordEndFrac = min(max(wordEnd / totalDuration, wordStartFrac + 0.0001), groupEndFrac)
                                 addVisibilityAnimation(to: hlLayer, startFrac: wordStartFrac, endFrac: wordEndFrac, totalDuration: totalDuration)
                                 parentLayer.addSublayer(hlLayer)
                             }
