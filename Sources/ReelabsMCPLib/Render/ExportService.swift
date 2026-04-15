@@ -158,22 +158,44 @@ final class ExportService: Sendable {
                 captionLog("[ReeLabs Caption] hasCustomCompositor: \(hasCustomCompositor)")
 
                 if hasCustomCompositor {
-                    // TWO-PASS: animationTool is incompatible with customVideoCompositorClass.
-                    // Pass 1 exports with the custom compositor (overlays, transforms, crossfades).
-                    // Pass 2 loads the result and applies captions via animationTool.
-                    captionLog("[ReeLabs Caption] TWO-PASS: custom compositor conflicts with animationTool")
-                    diag.append("captionMode: two-pass (custom compositor conflict)")
-                    return try await twoPassExport(
+                    // SINGLE-PASS: render captions directly in the compositor alongside
+                    // overlays/transforms/crossfades. Eliminates the two-pass encode.
+                    captionLog("[ReeLabs Caption] SINGLE-PASS: captions rendered in compositor")
+                    diag.append("captionMode: single-pass (compositor caption rendering)")
+
+                    let totalDuration = CMTimeGetSeconds(composition.duration)
+                    let captionBuildStart = CFAbsoluteTimeGetCurrent()
+                    let captionOverlay = CaptionLayer.buildCompositorOverlay(
+                        transcriptData: transcriptData,
+                        config: captionConfig,
+                        videoSize: renderSize,
+                        totalDuration: totalDuration,
+                        exclusionZones: captionExclusionZones
+                    )
+                    profiler?.record("caption_overlay_build", seconds: CFAbsoluteTimeGetCurrent() - captionBuildStart)
+
+                    if let captionOverlay {
+                        captionSublayerCount = captionOverlay.groups.reduce(0) { $0 + $1.baseWords.count + $1.highlightWords.count }
+                        captionLog("[ReeLabs Caption] Built compositor caption overlay: \(captionOverlay.groups.count) groups, \(captionSublayerCount) word images")
+                        VideoCompositor.captionOverlay = captionOverlay
+                    }
+
+                    defer { VideoCompositor.captionOverlay = nil }
+
+                    let encodeStart = CFAbsoluteTimeGetCurrent()
+                    try await readerWriterExport(
                         composition: composition,
                         videoComposition: videoComposition!,
                         audioMix: audioMix,
                         outputURL: outputURL,
-                        captionConfig: captionConfig,
-                        transcriptData: transcriptData,
                         renderSize: renderSize,
-                        quality: quality,
-                        captionExclusionZones: captionExclusionZones,
-                        profiler: profiler
+                        quality: quality
+                    )
+                    profiler?.record("export_encode", seconds: CFAbsoluteTimeGetCurrent() - encodeStart)
+
+                    return ExportResult(
+                        captionsApplied: captionOverlay != nil,
+                        captionSublayerCount: captionSublayerCount
                     )
                 }
 

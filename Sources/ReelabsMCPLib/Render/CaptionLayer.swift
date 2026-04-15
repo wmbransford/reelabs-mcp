@@ -1,8 +1,32 @@
 import AppKit
 import AVFoundation
+import CoreImage
 import CoreText
 import Foundation
 import QuartzCore
+
+// MARK: - Compositor Caption Overlay
+
+/// Pre-rendered caption data for single-pass compositor rendering.
+/// Contains CIImages positioned in bottom-left (CIImage) coordinate space.
+struct CaptionOverlay: @unchecked Sendable {
+    let groups: [Group]
+
+    struct Group: @unchecked Sendable {
+        let startTime: Double   // composition time (seconds)
+        let endTime: Double
+        let baseWords: [Word]      // all words in base color (visible during group window)
+        let highlightWords: [Word] // same words in highlight color (visible during word window)
+    }
+
+    struct Word: @unchecked Sendable {
+        let startTime: Double
+        let endTime: Double
+        let image: CIImage     // pre-rendered text at origin (0,0)
+        let position: CGPoint  // CIImage bottom-left origin on canvas
+        let size: CGSize
+    }
+}
 
 enum CaptionLayer {
     /// Create a CALayer tree with word-by-word captions using pre-rendered CGImages.
@@ -184,6 +208,179 @@ enum CaptionLayer {
 
         captionLog("[CaptionLayer] Created \(parentLayer.sublayers?.count ?? 0) sublayers")
         return parentLayer
+    }
+
+    // MARK: - Compositor Overlay Builder
+
+    /// Build a CaptionOverlay for the VideoCompositor (single-pass rendering).
+    /// Mirrors createOverlay() logic but outputs CIImages with bottom-left coords
+    /// instead of CALayers with keyframe animations.
+    static func buildCompositorOverlay(
+        transcriptData: TranscriptData,
+        config: CaptionConfig,
+        videoSize: CGSize,
+        totalDuration: Double,
+        exclusionZones: [ClosedRange<Double>] = []
+    ) -> CaptionOverlay? {
+        guard totalDuration > 0 else { return nil }
+
+        let fontSize = (config.fontSize ?? 7.0) / 100.0 * videoSize.height
+        let wordsPerGroup = config.wordsPerGroup ?? 3
+        let allCaps = config.allCaps ?? true
+        let shadow = config.shadow ?? true
+        let position = (config.position ?? 70.0) / 100.0 * videoSize.height
+        let stripPunctuation = !(config.punctuation ?? true)
+
+        let textColor = parseColor(config.color ?? "#FFFFFF")
+        let highlightColor = parseColor(config.highlightColor ?? config.color ?? "#FFFFFF")
+        let hasHighlight = config.highlightColor != nil
+
+        let font = resolveFont(family: config.fontFamily, weight: config.fontWeight, size: fontSize)
+
+        let relevantWords = transcriptData.words.filter { word in
+            word.startTime >= 0 && word.endTime > word.startTime && word.startTime < totalDuration
+        }
+        let groups = groupWords(relevantWords, wordsPerGroup: wordsPerGroup)
+        guard !groups.isEmpty else { return nil }
+
+        let maxWidth = videoSize.width * 0.9
+        let renderH = videoSize.height
+
+        var captionGroups: [CaptionOverlay.Group] = []
+
+        for (groupIdx, group) in groups.enumerated() {
+            autoreleasepool {
+                guard let firstWord = group.first, let lastWord = group.last else { return }
+                let startSec = firstWord.startTime
+                let nextGroupStart = (groupIdx + 1 < groups.count) ? groups[groupIdx + 1].first?.startTime : nil
+                let rawEnd = min(lastWord.endTime, totalDuration)
+                let endSec = nextGroupStart.map { min(rawEnd, $0) } ?? rawEnd
+                guard endSec > startSec else { return }
+
+                let overlapsExclusion = exclusionZones.contains { zone in
+                    startSec < zone.upperBound && endSec > zone.lowerBound
+                }
+                if overlapsExclusion { return }
+
+                var baseWords: [CaptionOverlay.Word] = []
+                var highlightWords: [CaptionOverlay.Word] = []
+
+                if hasHighlight {
+                    let spaceWidth = measureText(" ", font: font, shadow: shadow, maxWidth: maxWidth).width
+
+                    struct WordRender {
+                        let wordData: TranscriptWord
+                        let baseImage: CGImage
+                        let baseSize: CGSize
+                        let hlImage: CGImage?
+                    }
+                    var renders: [WordRender] = []
+                    for wordData in group {
+                        let wordText = formatWord(wordData.word, allCaps: allCaps, stripPunctuation: stripPunctuation)
+                        guard let (baseImage, baseSize) = renderTextToImage(
+                            text: wordText, font: font, color: textColor, shadow: shadow, maxWidth: maxWidth
+                        ) else { continue }
+                        let hlImage = renderTextToImage(
+                            text: wordText, font: font, color: highlightColor, shadow: shadow, maxWidth: maxWidth
+                        )?.0
+                        renders.append(WordRender(wordData: wordData, baseImage: baseImage, baseSize: baseSize, hlImage: hlImage))
+                    }
+
+                    // Line wrapping (same algorithm as createOverlay)
+                    var lines: [[WordRender]] = []
+                    var currentLine: [WordRender] = []
+                    var lineW: CGFloat = 0
+                    for r in renders {
+                        let needed = currentLine.isEmpty ? r.baseSize.width : r.baseSize.width + spaceWidth
+                        if !currentLine.isEmpty && lineW + needed > maxWidth {
+                            lines.append(currentLine)
+                            currentLine = [r]
+                            lineW = r.baseSize.width
+                        } else {
+                            currentLine.append(r)
+                            lineW += needed
+                        }
+                    }
+                    if !currentLine.isEmpty { lines.append(currentLine) }
+
+                    let lineHeight = renders.first.map { $0.baseSize.height } ?? CGFloat(fontSize)
+                    let totalTextHeight = lineHeight * CGFloat(lines.count)
+                    let baseTopY = position - totalTextHeight / 2  // top-left Y
+
+                    for (lineIdx, line) in lines.enumerated() {
+                        let thisLineW = line.enumerated().reduce(CGFloat(0)) { acc, pair in
+                            acc + pair.element.baseSize.width + (pair.offset > 0 ? spaceWidth : 0)
+                        }
+                        let lineX = (videoSize.width - thisLineW) / 2
+                        let lineTopY = baseTopY + CGFloat(lineIdx) * lineHeight
+                        var currentX: CGFloat = 0
+
+                        for r in line {
+                            // Convert top-left coords to CIImage bottom-left origin
+                            let ciX = lineX + currentX
+                            let ciY = renderH - lineTopY - r.baseSize.height
+
+                            let baseCIImage = CIImage(cgImage: r.baseImage)
+                            baseWords.append(CaptionOverlay.Word(
+                                startTime: startSec,
+                                endTime: endSec,
+                                image: baseCIImage,
+                                position: CGPoint(x: ciX, y: ciY),
+                                size: r.baseSize
+                            ))
+
+                            if let hlImg = r.hlImage {
+                                let hlCIImage = CIImage(cgImage: hlImg)
+                                let wordStart = max(r.wordData.startTime, startSec)
+                                let wordEnd = max(min(r.wordData.endTime, endSec), wordStart + 0.01)
+                                highlightWords.append(CaptionOverlay.Word(
+                                    startTime: wordStart,
+                                    endTime: wordEnd,
+                                    image: hlCIImage,
+                                    position: CGPoint(x: ciX, y: ciY),
+                                    size: r.baseSize
+                                ))
+                            }
+
+                            currentX += r.baseSize.width + spaceWidth
+                        }
+                    }
+                } else {
+                    // Simple mode — full group text as one image
+                    let fullText = group.map { formatWord($0.word, allCaps: allCaps, stripPunctuation: stripPunctuation) }.joined(separator: " ")
+                    let fullSize = measureText(fullText, font: font, shadow: shadow, maxWidth: maxWidth)
+
+                    guard let (image, imgSize) = renderTextToImage(
+                        text: fullText, font: font, color: textColor, shadow: shadow, maxWidth: maxWidth
+                    ) else { return }
+
+                    let layerX = (videoSize.width - fullSize.width) / 2
+                    let layerTopY = position - fullSize.height / 2
+                    let ciX = layerX
+                    let ciY = renderH - layerTopY - imgSize.height
+
+                    let ciImage = CIImage(cgImage: image)
+                    baseWords.append(CaptionOverlay.Word(
+                        startTime: startSec,
+                        endTime: endSec,
+                        image: ciImage,
+                        position: CGPoint(x: ciX, y: ciY),
+                        size: imgSize
+                    ))
+                }
+
+                captionGroups.append(CaptionOverlay.Group(
+                    startTime: startSec,
+                    endTime: endSec,
+                    baseWords: baseWords,
+                    highlightWords: highlightWords
+                ))
+            }
+        }
+
+        guard !captionGroups.isEmpty else { return nil }
+        captionLog("[CaptionLayer] Built compositor overlay: \(captionGroups.count) groups")
+        return CaptionOverlay(groups: captionGroups)
     }
 
     // MARK: - CGImage Text Rendering

@@ -19,6 +19,11 @@ private final class FrameCounter: @unchecked Sendable {
 /// corner radius masking, and source crop — all in one pipeline.
 final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
 
+    /// Pre-rendered caption overlay for single-pass rendering.
+    /// Set before reader.startReading(), cleared after export completes.
+    /// Thread-safe: RenderQueue serializes renders.
+    nonisolated(unsafe) static var captionOverlay: CaptionOverlay?
+
     // Pixel buffer attributes for input/output
     var sourcePixelBufferAttributes: [String: any Sendable]? {
         [
@@ -273,6 +278,28 @@ final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
 
                 // Composite onto canvas (sourceOver)
                 canvas = image.composited(over: canvas)
+            }
+
+            // Composite captions (single-pass rendering)
+            if let captionOverlay = Self.captionOverlay {
+                let t = CMTimeGetSeconds(currentTime)
+                for group in captionOverlay.groups {
+                    guard t >= group.startTime && t < group.endTime else { continue }
+                    // Base words (all visible during group window)
+                    for word in group.baseWords {
+                        let img = word.image.transformed(by: CGAffineTransform(
+                            translationX: word.position.x, y: word.position.y))
+                        canvas = img.composited(over: canvas)
+                    }
+                    // Highlight word (visible only during its time window)
+                    for word in group.highlightWords {
+                        guard t >= word.startTime && t < word.endTime else { continue }
+                        let img = word.image.transformed(by: CGAffineTransform(
+                            translationX: word.position.x, y: word.position.y))
+                        canvas = img.composited(over: canvas)
+                    }
+                    break  // only one group active at a time
+                }
             }
 
             // Render to output pixel buffer
