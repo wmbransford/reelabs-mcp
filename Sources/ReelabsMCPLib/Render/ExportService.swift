@@ -34,7 +34,8 @@ final class ExportService: Sendable {
         captionConfig: CaptionConfig? = nil,
         transcriptData: TranscriptData? = nil,
         renderSize: CGSize,
-        quality: QualityConfig? = nil
+        quality: QualityConfig? = nil,
+        captionExclusionZones: [ClosedRange<Double>] = []
     ) async throws -> ExportResult {
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try FileManager.default.removeItem(at: outputURL)
@@ -169,7 +170,8 @@ final class ExportService: Sendable {
                         captionConfig: captionConfig,
                         transcriptData: transcriptData,
                         renderSize: renderSize,
-                        quality: quality
+                        quality: quality,
+                        captionExclusionZones: captionExclusionZones
                     )
                 }
 
@@ -184,7 +186,8 @@ final class ExportService: Sendable {
                     transcriptData: transcriptData,
                     config: captionConfig,
                     videoSize: renderSize,
-                    totalDuration: totalDuration
+                    totalDuration: totalDuration,
+                    exclusionZones: captionExclusionZones
                 )
                 captionSublayerCount = captionLayer.sublayers?.count ?? 0
                 captionLog("[ReeLabs Caption] captionLayer sublayers=\(captionSublayerCount)")
@@ -294,7 +297,8 @@ final class ExportService: Sendable {
         captionConfig: CaptionConfig,
         transcriptData: TranscriptData,
         renderSize: CGSize,
-        quality: QualityConfig?
+        quality: QualityConfig?,
+        captionExclusionZones: [ClosedRange<Double>] = []
     ) async throws -> ExportResult {
         let codec = quality?.codec ?? .h264
         let preset = Self.exportPreset(for: renderSize, codec: codec)
@@ -371,7 +375,8 @@ final class ExportService: Sendable {
             transcriptData: transcriptData,
             config: captionConfig,
             videoSize: renderSize,
-            totalDuration: totalDuration
+            totalDuration: totalDuration,
+            exclusionZones: captionExclusionZones
         )
         let captionSublayerCount = captionLayer.sublayers?.count ?? 0
         captionLog("[TwoPass] Caption layer: sublayers=\(captionSublayerCount)")

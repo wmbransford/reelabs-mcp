@@ -6,7 +6,6 @@ package struct ServerConfig: Sendable {
     package let chirpModel: String
     package let serviceAccountPath: String?
     package let databasePath: String?
-    package let gcsBucket: String
     package let httpPort: Int?
     package let httpHost: String?
 
@@ -45,7 +44,6 @@ package struct ServerConfig: Sendable {
                     chirpModel: json["chirp_model"] as? String ?? "chirp_3",
                     serviceAccountPath: saPath,
                     databasePath: json["database_path"] as? String,
-                    gcsBucket: json["gcs_bucket"] as? String ?? "",
                     httpPort: json["http_port"] as? Int,
                     httpHost: json["http_host"] as? String
                 )
@@ -59,7 +57,6 @@ package struct ServerConfig: Sendable {
             chirpModel: "chirp_3",
             serviceAccountPath: nil,
             databasePath: nil,
-            gcsBucket: "",
             httpPort: nil,
             httpHost: nil
         )

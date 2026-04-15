@@ -5,7 +5,7 @@ import MCP
 package enum TranscribeTool {
     package static let tool = Tool(
         name: "reelabs_transcribe",
-        description: "Transcribe a video/audio file using Google Cloud Speech-to-Text (Chirp). Returns word-level timestamps. Stores result in database for caption rendering and search. Short audio (<= 60s) uses sync API; longer audio uploads to GCS and uses batch API.",
+        description: "Transcribe a video/audio file using Google Cloud Speech-to-Text (Chirp). Returns word-level timestamps. Stores result in database for caption rendering and search. All audio uses the sync API — clips over 55s are chunked and transcribed in parallel for accurate timestamps.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
@@ -56,8 +56,7 @@ package enum TranscribeTool {
             let client = try ChirpClient(
                 serviceAccountPath: saPath,
                 location: config.chirpLocation,
-                model: config.chirpModel,
-                gcsBucket: config.gcsBucket
+                model: config.chirpModel
             )
             let transcriptData = try await client.transcribe(
                 flacURL: flacURL,
@@ -81,7 +80,7 @@ package enum TranscribeTool {
             transcript = try transcriptRepo.createWithWords(transcript, words: transcriptData.words)
 
             // Return compact transcript — utterances grouped by silence gaps
-            let mode = durationSeconds <= 60 ? "sync" : "batch (GCS)"
+            let mode = durationSeconds <= 55 ? "sync" : "chunked-sync (\(Int(ceil(durationSeconds / 50))) chunks)"
             let response: [String: Any] = [
                 "transcript_id": transcript.id ?? 0,
                 "word_count": transcriptData.words.count,

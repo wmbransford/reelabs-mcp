@@ -55,11 +55,25 @@ package enum DefaultPresets {
             "punctuation": true
         ]
 
+        let william: [String: Any] = [
+            "fontFamily": "Poppins",
+            "fontSize": 7.0,
+            "fontWeight": "bold",
+            "color": "#FAF9F5",
+            "highlightColor": "#D97757",
+            "position": 70.0,
+            "allCaps": true,
+            "shadow": true,
+            "wordsPerGroup": 3,
+            "punctuation": false
+        ]
+
         let presets: [(String, String, [String: Any], String)] = [
             ("tiktok", "caption", tiktok, "Bold centered captions for TikTok/Reels — yellow highlight, 3 words"),
             ("subtitle", "caption", subtitle, "Professional subtitle style — bottom-aligned, 6 words per group"),
             ("minimal", "caption", minimal, "Understated minimal captions — light font, no shadow"),
             ("bold_center", "caption", boldCenter, "Bold centered captions — green highlight, 2 words per group"),
+            ("william", "caption", william, "Poppins bold, cream/burnt orange karaoke — 3 words, no punctuation"),
         ]
 
         for (name, type, config, desc) in presets {

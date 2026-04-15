@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CoreGraphics
 import CoreImage
@@ -430,6 +431,51 @@ final class CompositionBuilder: Sendable {
                     ))
 
                     captionLog("[Builder] Text overlay: title=\(textConfig.title ?? "<none>") target=\(Int(targetRect.width))x\(Int(targetRect.height))@(\(Int(targetRect.origin.x)),\(Int(targetRect.origin.y))) time=\(round(CMTimeGetSeconds(overlayStart)*1000)/1000)..\(round(CMTimeGetSeconds(overlayEnd)*1000)/1000)")
+
+                case .image:
+                    guard let path = overlay.imagePath, !path.isEmpty else {
+                        throw CompositionError.imageOverlayPathMissing
+                    }
+                    guard let nsImage = NSImage(contentsOfFile: path) else {
+                        throw CompositionError.imageOverlayLoadFailed(path)
+                    }
+                    guard let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                        throw CompositionError.imageOverlayLoadFailed(path)
+                    }
+                    var ciImage = CIImage(cgImage: cgImage)
+
+                    // Scale to cover-fill the target rect, then crop to exact size
+                    let imgW = CGFloat(cgImage.width)
+                    let imgH = CGFloat(cgImage.height)
+                    let scaleX = targetRect.width / imgW
+                    let scaleY = targetRect.height / imgH
+                    let coverScale = max(scaleX, scaleY)
+                    ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: coverScale, y: coverScale))
+                    // Center-crop to target dimensions
+                    let scaledW = imgW * coverScale
+                    let scaledH = imgH * coverScale
+                    let cropX = (scaledW - targetRect.width) / 2
+                    let cropY = (scaledH - targetRect.height) / 2
+                    ciImage = ciImage.cropped(to: CGRect(x: cropX, y: cropY, width: targetRect.width, height: targetRect.height))
+                    // Reset origin to (0,0)
+                    ciImage = ciImage.transformed(by: CGAffineTransform(translationX: -cropX, y: -cropY))
+
+                    overlayLayouts.append(OverlayLayout(
+                        trackID: kCMPersistentTrackID_Invalid,
+                        overlayStart: overlayStart,
+                        overlayEnd: overlayEnd,
+                        preferredTransform: .identity,
+                        naturalSize: targetRect.size,
+                        targetRect: targetRect,
+                        cornerRadiusFraction: overlay.cornerRadius,
+                        cropRect: nil,
+                        opacity: Float(overlay.opacity ?? 1.0),
+                        generatedImage: ciImage,
+                        fadeIn: fadeIn,
+                        fadeOut: fadeOut
+                    ))
+
+                    captionLog("[Builder] Image overlay: path=\(path) source=\(Int(imgW))x\(Int(imgH)) target=\(Int(targetRect.width))x\(Int(targetRect.height))@(\(Int(targetRect.origin.x)),\(Int(targetRect.origin.y))) time=\(round(CMTimeGetSeconds(overlayStart)*1000)/1000)..\(round(CMTimeGetSeconds(overlayEnd)*1000)/1000)")
                 }
             }
         }
@@ -856,6 +902,8 @@ enum CompositionError: Error, LocalizedError {
     case sourceNotFound(String)
     case musicTrackNotFound(String)
     case overlaySourceNotFound(String)
+    case imageOverlayPathMissing
+    case imageOverlayLoadFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -863,6 +911,8 @@ enum CompositionError: Error, LocalizedError {
         case .sourceNotFound(let id): "Source not found: \(id)"
         case .musicTrackNotFound(let path): "No audio track found in music file: \(path)"
         case .overlaySourceNotFound(let id): "Overlay source not found: \(id)"
+        case .imageOverlayPathMissing: "Image overlay requires imagePath"
+        case .imageOverlayLoadFailed(let path): "Failed to load image overlay: \(path)"
         }
     }
 }

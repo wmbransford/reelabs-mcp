@@ -279,13 +279,14 @@ Example:
 }
 ```
 
-**overlays** (optional) — overlay tracks composited on top of the main video. Three overlay types:
+**overlays** (optional) — overlay tracks composited on top of the main video. Four overlay types:
 
 1. **Video overlay** — `sourceId` present. B-roll, PiP, etc. Source must be in the `sources` array.
-2. **Color overlay** — `backgroundColor` present (no `sourceId`, no `text`). Solid color rectangle.
-3. **Text overlay** — `text` present. Text card with optional background.
+2. **Image overlay** — `imagePath` present. Static image from disk (PNG, JPEG, etc.). Use with `reelabs_graphic` output.
+3. **Color overlay** — `backgroundColor` present (no `sourceId`, no `imagePath`, no `text`). Solid color rectangle.
+4. **Text overlay** — `text` present. Text card with optional background.
 
-Type is inferred from field presence. Coordinates use 0.0-1.0 fractions of the render size with top-left origin.
+Type is inferred from field presence (priority: `sourceId` > `imagePath` > `text` > color). Coordinates use 0.0-1.0 fractions of the render size with top-left origin.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -304,6 +305,7 @@ Type is inferred from field presence. Coordinates use 0.0-1.0 fractions of the r
 | `crop` | object | — | sub-region of source: `{x, y, width, height}` as 0-1 fractions (video overlays only) |
 | `backgroundColor` | string | — | hex color `#RRGGBB` or `#RRGGBBAA`. Required for color overlays, optional for text |
 | `text` | object | — | text card config (see below). Makes this a text overlay |
+| `imagePath` | string | — | absolute path to image file (PNG, JPEG). Makes this an image overlay |
 | `fadeIn` | double | 0 | seconds for opacity fade-in at overlay start |
 | `fadeOut` | double | 0 | seconds for opacity fade-out at overlay end |
 
@@ -413,6 +415,20 @@ Example — Text card with fade in/out:
 }
 ```
 
+Example — Image overlay from `reelabs_graphic` (lower third PNG):
+```json
+{
+  "overlays": [
+    {
+      "imagePath": "/path/to/lower-third.png",
+      "start": 2.0, "end": 10.0,
+      "x": 0.0, "y": 0.75, "width": 1.0, "height": 0.25,
+      "fadeIn": 0.3, "fadeOut": 0.3
+    }
+  ]
+}
+```
+
 **resolution** (optional) — defaults to source. Accepts:
 - Preset string: `"720p"`, `"1080p"`, `"4k"`
 - Custom object: `{"width": 1920, "height": 1080}`
@@ -460,6 +476,61 @@ If `captions_applied` is false when you expected captions, check:
 | `bold_center` | Arial | bold | #FFFFFF | #00FF88 (green) | 50% | 2 | yes | yes |
 
 Presets with `highlightColor` animate word-by-word: the active word lights up in the highlight color while others stay in the base color.
+
+## Custom Presets
+
+### Caption Preset: `william`
+
+| Field | Value |
+|-------|-------|
+| `fontFamily` | Poppins |
+| `fontWeight` | bold |
+| `color` | #FAF9F5 (cream) |
+| `highlightColor` | #D97757 (burnt orange) |
+| `wordsPerGroup` | 3 |
+| `allCaps` | true |
+| `shadow` | true |
+| `position` | 70 |
+| `punctuation` | false |
+
+Karaoke style — the active word highlights in burnt orange, the rest display in cream.
+
+### Keyframe Patterns
+
+#### `engaging` (default)
+
+Alternating segments: slow push in (scale 1.0 → 1.15 over ~4s), then pull back (1.15 → 1.0). Keeps footage alive without being jarring.
+
+```json
+// Segment A — push in
+"keyframes": [{"time": 0, "scale": 1.0}, {"time": 4, "scale": 1.15}]
+
+// Segment B — pull back
+"keyframes": [{"time": 0, "scale": 1.15}, {"time": 4, "scale": 1.0}]
+```
+
+#### `hard_cut_emphasis`
+
+Every 7–12 seconds, split the segment and alternate between scale 1.0 (normal) and 1.2 (punched in). No smooth keyframe animation — instant scale jump creates a hard cut feel. Prefer splitting at sentence boundaries from the transcript. The zoom level (default 1.2) is configurable.
+
+```json
+// Segment 1 — normal
+"transform": {"scale": 1.0}
+
+// Segment 2 — punched in (split at sentence boundary)
+"transform": {"scale": 1.2}
+
+// Segment 3 — normal
+"transform": {"scale": 1.0}
+```
+
+#### `subtle`
+
+Scale 1.0 → 1.05 over 10+ seconds. Barely perceptible drift for calm, reflective moments.
+
+```json
+"keyframes": [{"time": 0, "scale": 1.0}, {"time": 12, "scale": 1.05}]
+```
 
 ## Aspect Ratios
 
@@ -531,3 +602,154 @@ Switch to HEVC codec:
 ```
 
 Overrides are deep-merged: nested objects (captions, audio, quality) merge field-by-field, while arrays (sources, segments, overlays) replace entirely. The original render is preserved — a new render record is created.
+
+## Graphic Render
+
+`reelabs_graphic` renders HTML/CSS to a PNG image. Use it to generate title cards, lower thirds, thumbnails, or any visual graphic that can be expressed as HTML. The output PNG can be used as an overlay source in a RenderSpec.
+
+**Inputs:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `html` | string | yes | — | HTML to render. Inline all CSS — no external stylesheets or images |
+| `width` | int | yes | — | Output width in pixels (1–7680) |
+| `height` | int | yes | — | Output height in pixels (1–7680) |
+| `output_path` | string | no | `./Generated Graphics/{uuid}.png` | Absolute path for the output PNG |
+| `timeout` | double | no | 10 | Render timeout in seconds |
+
+**Output:**
+
+```json
+{
+  "output_path": "/path/to/graphic.png",
+  "width": 1920,
+  "height": 1080,
+  "file_size_bytes": 45230,
+  "file_size_kb": 44.2
+}
+```
+
+**Transparency:** The renderer has a transparent background by default. Set `background-color` in your HTML/CSS to add a background, or leave it transparent for compositing as an overlay.
+
+**Tips:**
+- Always use the source video's resolution from your probe results — this ensures pixel-perfect overlays at any resolution (1080p, 4K, etc.). For partial overlays like lower thirds, use the probed width with a custom height.
+- All styles must be inline or in `<style>` tags — external URLs are not loaded
+- macOS system fonts are available (Arial, Helvetica, SF Pro, etc.)
+- Use `viewport` meta tag if needed: `<meta name="viewport" content="width={width}">`
+- For 9:16 vertical content, use the probed resolution from a 9:16 source, or explicit width/height if no source video exists
+
+**Example — Title card with gradient background:**
+```json
+{
+  "html": "<div style='width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#667eea,#764ba2);font-family:Arial'><h1 style='color:white;font-size:72px;text-align:center'>My Video Title</h1></div>",
+  "width": 1920,
+  "height": 1080
+}
+```
+
+**Example — Transparent lower third:**
+```json
+{
+  "html": "<div style='position:absolute;bottom:0;left:0;right:0;padding:24px 32px;background:linear-gradient(transparent,rgba(0,0,0,0.8))'><div style='font-family:Arial;color:white;font-size:36px;font-weight:bold'>Speaker Name</div><div style='font-family:Arial;color:#ccc;font-size:24px;margin-top:8px'>CEO, Example Corp</div></div>",
+  "width": 1920,
+  "height": 200
+}
+```
+
+## Layout Tool
+
+`reelabs_layout` generates overlay arrays for screen recording layouts — PiP, split-screen, speaker focus, etc. It takes a screen source, speaker source, and a timeline of layout switches, and returns overlays ready to drop into a RenderSpec.
+
+**Inputs:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `screen` | string | yes | — | Source ID of the screen recording |
+| `speaker` | string | yes | — | Source ID of the speaker/facecam |
+| `aspectRatio` | string | no | `"16:9"` | Target aspect ratio: `"16:9"`, `"9:16"`, `"1:1"`, `"4:5"` |
+| `timeline` | array | yes | — | Array of `{layout, start, end}` objects |
+| `style` | object | no | — | Optional style overrides (see below) |
+
+**timeline** entries:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `layout` | string | yes | Layout name (see table below) |
+| `start` | double | yes | Start time in seconds |
+| `end` | double | yes | End time in seconds |
+
+**style** fields (all optional):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `cornerRadius` | double | 0.15 | Speaker corner radius 0-1 |
+| `padding` | double | 0.02 | Edge padding 0-1 |
+| `speakerCrop` | object | — | Crop speaker source: `{x, y, width, height}` as 0-1 fractions |
+| `background` | string | `"#1a1a2e"` | Background color hex for split/focus layouts |
+| `transitionDuration` | double | 0.4 | Crossfade duration between layouts in seconds |
+
+**Available layouts (16:9 landscape):**
+
+| Layout | Screen | Speaker | Background |
+|--------|--------|---------|------------|
+| `pip_small` | full frame | bottom-left, small (22%) | none |
+| `pip_medium` | full frame | bottom-left, medium (35%) | none |
+| `split` | right 58% | left 30% | yes |
+| `speaker_focus` | bottom-right 38% | center-left 55% | yes |
+| `screen_only` | full frame | hidden | none |
+| `speaker_only` | hidden | full frame | none |
+
+For `9:16` portrait, positions auto-adjust: PiP moves to bottom-center, split stacks vertically.
+
+**Output:**
+
+```json
+{
+  "overlays": [...],
+  "layout_count": 3,
+  "notes": "3 layout sections (pip_small, split), 90.0s total. Screen source \"screen\" as base segment provides audio."
+}
+```
+
+The `overlays` array goes directly into a RenderSpec. The screen source should also be the base segment (for audio and timeline). Speaker audio is muted in the overlays.
+
+**Compositing approach:**
+- Base segment uses the screen source (provides audio + timeline)
+- Screen overlay (same source, `audio: 0`) provides the visual at the right position
+- Speaker overlay provides the facecam
+- Background color overlay appears for layouts that need it (split, speaker_focus)
+- Transitions use `fadeIn`/`fadeOut` on incoming/outgoing layout sections
+
+**Example — Tutorial with PiP intro, split explanation, back to PiP:**
+
+```json
+{
+  "screen": "screen",
+  "speaker": "cam",
+  "aspectRatio": "16:9",
+  "timeline": [
+    {"layout": "pip_small", "start": 0, "end": 30},
+    {"layout": "split", "start": 30, "end": 60},
+    {"layout": "pip_small", "start": 60, "end": 90}
+  ],
+  "style": {
+    "cornerRadius": 0.15,
+    "speakerCrop": {"x": 0.15, "y": 0, "width": 0.7, "height": 1.0},
+    "background": "#1a1a2e"
+  }
+}
+```
+
+Use the returned overlays in a render:
+```json
+{
+  "sources": [
+    {"id": "screen", "path": "/path/to/screen.mp4"},
+    {"id": "cam", "path": "/path/to/camera.mp4"}
+  ],
+  "segments": [
+    {"sourceId": "screen", "start": 0, "end": 90}
+  ],
+  "overlays": [... from reelabs_layout response ...],
+  "outputPath": "/path/to/output.mp4"
+}

@@ -219,18 +219,21 @@ package struct Overlay: Codable, Sendable {
     let crop: CropRect?     // sub-region of source video (0-1 fractions)
     let backgroundColor: String? // hex color (#RRGGBB or #RRGGBBAA) for color/text overlays
     let text: TextOverlayConfig? // text card content and styling
+    let imagePath: String?  // absolute path to image file (PNG, JPEG) for image overlays
     let fadeIn: Double?     // seconds for opacity fade-in at start
     let fadeOut: Double?    // seconds for opacity fade-out at end
 
     /// Overlay kind inferred from field presence.
     package enum Kind {
         case video       // sourceId present
-        case color       // backgroundColor present, no sourceId, no text
+        case image       // imagePath present (static image from disk)
+        case color       // backgroundColor present, no sourceId, no text, no imagePath
         case text        // text present (with optional backgroundColor)
     }
 
     package var kind: Kind {
         if sourceId != nil { return .video }
+        if imagePath != nil { return .image }
         if text != nil { return .text }
         return .color
     }

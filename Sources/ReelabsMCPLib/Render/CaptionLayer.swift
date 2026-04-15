@@ -12,7 +12,8 @@ enum CaptionLayer {
         transcriptData: TranscriptData,
         config: CaptionConfig,
         videoSize: CGSize,
-        totalDuration: Double
+        totalDuration: Double,
+        exclusionZones: [ClosedRange<Double>] = []
     ) -> CALayer {
         let parentLayer = CALayer()
         parentLayer.frame = CGRect(origin: .zero, size: videoSize)
@@ -45,7 +46,7 @@ enum CaptionLayer {
         let groups = groupWords(relevantWords, wordsPerGroup: wordsPerGroup)
 
         let invalidCount = transcriptData.words.count - relevantWords.count
-        captionLog("[CaptionLayer] words=\(relevantWords.count), invalid=\(invalidCount), groups=\(groups.count)")
+        captionLog("[CaptionLayer] words=\(relevantWords.count), invalid=\(invalidCount), groups=\(groups.count), exclusionZones=\(exclusionZones.count)")
 
         let maxWidth = videoSize.width * 0.9
 
@@ -55,6 +56,12 @@ enum CaptionLayer {
                 let startSec = firstWord.startTime
                 let endSec = min(lastWord.endTime, totalDuration)
                 guard endSec > startSec else { return }
+
+                // Skip groups that overlap with exclusion zones (e.g. overlay time ranges)
+                let overlapsExclusion = exclusionZones.contains { zone in
+                    startSec < zone.upperBound && endSec > zone.lowerBound
+                }
+                if overlapsExclusion { return }
 
                 let groupStartFrac = max(startSec / totalDuration, 0)
                 let groupEndFrac = min(max(endSec / totalDuration, groupStartFrac + 0.0001), 1.0)

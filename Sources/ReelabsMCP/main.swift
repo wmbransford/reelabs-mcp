@@ -80,6 +80,8 @@ func configureServer(_ server: Server) async {
             SilenceRemoveTool.tool,
             AnalyzeTool.tool,
             RerenderTool.tool,
+            GraphicTool.tool,
+            LayoutTool.tool,
         ])
     }
 
@@ -117,6 +119,12 @@ func configureServer(_ server: Server) async {
 
         case "reelabs_rerender":
             return await RerenderTool.handle(arguments: params.arguments, renderRepo: renderRepo, transcriptRepo: transcriptRepo, presetRepo: presetRepo)
+
+        case "reelabs_graphic":
+            return await GraphicTool.handle(arguments: params.arguments)
+
+        case "reelabs_layout":
+            return LayoutTool.handle(arguments: params.arguments)
 
         default:
             return .init(

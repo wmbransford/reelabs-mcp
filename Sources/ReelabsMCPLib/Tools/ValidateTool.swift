@@ -122,6 +122,20 @@ package enum ValidateTool {
                         if overlay.backgroundColor == nil {
                             issues.append("Overlay \(i): color overlay requires backgroundColor")
                         }
+                    case .image:
+                        if let path = overlay.imagePath, !path.isEmpty {
+                            if !FileManager.default.isReadableFile(atPath: path) {
+                                issues.append("Overlay \(i): image file not found or not readable: \(path)")
+                            } else {
+                                let ext = (path as NSString).pathExtension.lowercased()
+                                let supported = ["png", "jpg", "jpeg", "tiff", "bmp", "gif", "webp"]
+                                if !supported.contains(ext) {
+                                    issues.append("Overlay \(i): unsupported image format '.\(ext)' (supported: \(supported.joined(separator: ", ")))")
+                                }
+                            }
+                        } else {
+                            issues.append("Overlay \(i): image overlay requires imagePath")
+                        }
                     case .text:
                         let textConfig = overlay.text
                         if (textConfig?.title == nil || textConfig!.title!.isEmpty) && (textConfig?.body == nil || textConfig!.body!.isEmpty) {

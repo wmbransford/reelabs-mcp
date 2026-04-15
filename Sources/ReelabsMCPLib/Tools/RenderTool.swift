@@ -131,6 +131,11 @@ package enum RenderTool {
                 return .init(content: [.text(text: "Caption error: no words fall within segment time ranges. Check segment boundaries.", annotations: nil, _meta: nil)], isError: true)
             }
 
+            // Non-video overlays (image, color, text) automatically suppress captions
+            let captionExclusionZones: [ClosedRange<Double>] = (spec.overlays ?? [])
+                .filter { $0.sourceId == nil }
+                .map { $0.start...$0.end }
+
             let captionConfigForRender = resolvedCaptionConfig
             let transcriptDataForRender = transcriptData
             let (result, exportResult) = try await RenderQueue.shared.enqueue {
@@ -143,7 +148,8 @@ package enum RenderTool {
                     captionConfig: captionConfigForRender,
                     transcriptData: transcriptDataForRender,
                     renderSize: result.renderSize,
-                    quality: spec.quality
+                    quality: spec.quality,
+                    captionExclusionZones: captionExclusionZones
                 )
                 return (result, exportResult)
             }

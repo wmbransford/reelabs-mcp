@@ -1,46 +1,193 @@
+@preconcurrency import AVFoundation
 import Foundation
 import Security
 
 /// Google Cloud Speech-to-Text v2 (Chirp) client using service account JWT auth.
-/// Routes short audio (<= 60s) through the sync Recognize API and longer audio
-/// through GCS upload + BatchRecognize.
+/// All audio goes through the sync Recognize API — long audio is chunked into
+/// ≤55s segments and transcribed in parallel.
 final class ChirpClient: Sendable {
     let serviceAccount: ServiceAccount
     let location: String
     let model: String
-    let gcsBucket: String
 
-    init(serviceAccountPath: String, location: String = "us", model: String = "chirp_3", gcsBucket: String = "") throws {
+    init(serviceAccountPath: String, location: String = "us", model: String = "chirp_3") throws {
         let data = try Data(contentsOf: URL(fileURLWithPath: serviceAccountPath))
         self.serviceAccount = try JSONDecoder().decode(ServiceAccount.self, from: data)
         self.location = location
         self.model = model
-        self.gcsBucket = gcsBucket
     }
 
-    /// Main entry point. Routes to sync or batch based on duration.
+    /// Main entry point. All audio goes through the sync API — long audio is
+    /// chunked into ≤55s segments and transcribed in parallel, avoiding the batch
+    /// API's timestamp offset bugs entirely.
     func transcribe(flacURL: URL, durationSeconds: Double, language: String = "en-US") async throws -> TranscriptData {
         let accessToken = try await getAccessToken()
 
-        if durationSeconds <= 60 {
+        if durationSeconds <= 55 {
             return try await transcribeSync(flacURL: flacURL, accessToken: accessToken, language: language)
         } else {
-            guard !gcsBucket.isEmpty else {
-                throw ChirpError.parseError("Audio is over 1 minute. Set gcs_bucket in config.json for long audio transcription.")
-            }
-            let objectName = "transcription/\(UUID().uuidString).flac"
-            let gcsURI = try await uploadToGCS(flacURL: flacURL, objectName: objectName, accessToken: accessToken)
-            defer {
-                Task { [gcsBucket, accessToken] in
-                    do {
-                        try await ChirpClient.deleteFromGCS(bucket: gcsBucket, objectName: objectName, accessToken: accessToken)
-                    } catch {
-                        captionLog("[ChirpClient] Warning: failed to delete GCS object '\(objectName)': \(error.localizedDescription)")
-                    }
+            return try await transcribeChunkedSync(
+                flacURL: flacURL,
+                durationSeconds: durationSeconds,
+                accessToken: accessToken,
+                language: language
+            )
+        }
+    }
+
+    // MARK: - Chunked Sync Transcription
+
+    private let maxChunkSeconds = 55.0
+    private let overlapSeconds = 5.0
+
+    private func transcribeChunkedSync(
+        flacURL: URL,
+        durationSeconds: Double,
+        accessToken: String,
+        language: String
+    ) async throws -> TranscriptData {
+        let chunks = try splitAudio(flacURL: flacURL)
+        defer {
+            for chunk in chunks { try? FileManager.default.removeItem(at: chunk.url) }
+        }
+
+        captionLog("[ChirpClient] Split \(String(format: "%.1f", durationSeconds))s audio into \(chunks.count) chunks for parallel sync transcription")
+
+        let results: [(offset: Double, transcript: TranscriptData)] = try await withThrowingTaskGroup(
+            of: (index: Int, offset: Double, transcript: TranscriptData).self
+        ) { group in
+            for (index, chunk) in chunks.enumerated() {
+                group.addTask {
+                    let transcript = try await self.transcribeSync(
+                        flacURL: chunk.url, accessToken: accessToken, language: language
+                    )
+                    return (index: index, offset: chunk.offsetSeconds, transcript: transcript)
                 }
             }
-            return try await transcribeBatch(gcsURI: gcsURI, accessToken: accessToken, language: language)
+
+            var collected: [(index: Int, offset: Double, transcript: TranscriptData)] = []
+            for try await result in group {
+                collected.append(result)
+            }
+            return collected.sorted { $0.index < $1.index }
+                .map { (offset: $0.offset, transcript: $0.transcript) }
         }
+
+        let merged = stitchTranscripts(chunks: results)
+        captionLog("[ChirpClient] Stitched \(chunks.count) chunks -> \(merged.words.count) words")
+        return merged
+    }
+
+    private struct AudioChunk {
+        let url: URL
+        let offsetSeconds: Double
+        let durationSeconds: Double
+    }
+
+    private func splitAudio(flacURL: URL) throws -> [AudioChunk] {
+        let inputFile = try AVAudioFile(forReading: flacURL)
+        let sampleRate = inputFile.processingFormat.sampleRate
+        let totalFrames = inputFile.length
+
+        let maxChunkFrames = AVAudioFramePosition(maxChunkSeconds * sampleRate)
+        let overlapFrames = AVAudioFramePosition(overlapSeconds * sampleRate)
+        let stepFrames = maxChunkFrames - overlapFrames
+
+        var chunks: [AudioChunk] = []
+        var currentFrame: AVAudioFramePosition = 0
+
+        while currentFrame < totalFrames {
+            let remainingFrames = totalFrames - currentFrame
+
+            // Skip tiny tail (<2s) — already covered by previous chunk's overlap
+            if remainingFrames < AVAudioFramePosition(2.0 * sampleRate) && currentFrame > 0 {
+                break
+            }
+
+            let chunkFrames = min(maxChunkFrames, remainingFrames)
+
+            let chunkURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("flac")
+
+            inputFile.framePosition = currentFrame
+
+            let flacSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatFLAC,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: inputFile.processingFormat.channelCount
+            ]
+            let outputFile = try AVAudioFile(forWriting: chunkURL, settings: flacSettings)
+
+            let bufferSize: AVAudioFrameCount = 8192
+            var framesWritten: AVAudioFramePosition = 0
+
+            while framesWritten < chunkFrames {
+                let framesToRead = min(AVAudioFrameCount(chunkFrames - framesWritten), bufferSize)
+                guard let buffer = AVAudioPCMBuffer(
+                    pcmFormat: inputFile.processingFormat,
+                    frameCapacity: framesToRead
+                ) else { break }
+
+                do {
+                    try inputFile.read(into: buffer, frameCount: framesToRead)
+                    try outputFile.write(from: buffer)
+                    framesWritten += AVAudioFramePosition(buffer.frameLength)
+                } catch {
+                    break
+                }
+            }
+
+            let offsetSeconds = Double(currentFrame) / sampleRate
+            let durationSeconds = Double(framesWritten) / sampleRate
+            chunks.append(AudioChunk(url: chunkURL, offsetSeconds: offsetSeconds, durationSeconds: durationSeconds))
+
+            currentFrame += stepFrames
+        }
+
+        return chunks
+    }
+
+    private func stitchTranscripts(chunks: [(offset: Double, transcript: TranscriptData)]) -> TranscriptData {
+        guard !chunks.isEmpty else {
+            return TranscriptData(words: [], fullText: "", durationSeconds: 0)
+        }
+        if chunks.count == 1 {
+            return chunks[0].transcript
+        }
+
+        var allWords: [TranscriptWord] = []
+        var prevChunkEndTime: Double = 0
+
+        for (index, chunk) in chunks.enumerated() {
+            let offset = chunk.offset
+
+            for word in chunk.transcript.words {
+                let absoluteStart = word.startTime + offset
+                let absoluteEnd = word.endTime + offset
+
+                // Skip words in overlap region already covered by previous chunk
+                if index > 0 && absoluteStart < prevChunkEndTime {
+                    continue
+                }
+
+                allWords.append(TranscriptWord(
+                    word: word.word,
+                    startTime: absoluteStart,
+                    endTime: absoluteEnd,
+                    confidence: word.confidence
+                ))
+            }
+
+            if let lastWord = chunk.transcript.words.last {
+                prevChunkEndTime = lastWord.endTime + offset
+            }
+        }
+
+        let fullText = allWords.map(\.word).joined(separator: " ")
+        let durationSeconds = allWords.last.map { max($0.endTime, $0.startTime) } ?? 0
+
+        return TranscriptData(words: allWords, fullText: fullText, durationSeconds: durationSeconds)
     }
 
     // MARK: - Sync Recognize (short audio, inline base64)
@@ -66,7 +213,8 @@ final class ChirpClient: Sendable {
                 "languageCodes": [language],
                 "model": model,
                 "features": [
-                    "enableWordTimeOffsets": true
+                    "enableWordTimeOffsets": true,
+                    "enableAutomaticPunctuation": true
                 ],
                 "autoDecodingConfig": [String: Any]()
             ],
@@ -87,156 +235,6 @@ final class ChirpClient: Sendable {
         }
 
         return try parseSyncResponse(data: data)
-    }
-
-    // MARK: - GCS Upload / Delete
-
-    private func uploadToGCS(flacURL: URL, objectName: String, accessToken: String) async throws -> String {
-        let audioData = try Data(contentsOf: flacURL)
-
-        let encodedName = objectName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? objectName
-        let endpoint = "https://storage.googleapis.com/upload/storage/v1/b/\(gcsBucket)/o?uploadType=media&name=\(encodedName)"
-        guard let url = URL(string: endpoint) else {
-            throw ChirpError.invalidEndpoint
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("audio/flac", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("\(audioData.count)", forHTTPHeaderField: "Content-Length")
-        request.timeoutInterval = 600
-        request.httpBody = audioData
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw ChirpError.invalidResponse
-        }
-
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw ChirpError.apiError(statusCode: httpResponse.statusCode, body: "GCS upload failed (\(httpResponse.statusCode)): \(errorBody)")
-        }
-
-        return "gs://\(gcsBucket)/\(objectName)"
-    }
-
-    private static func deleteFromGCS(bucket: String, objectName: String, accessToken: String) async throws {
-        let encodedName = objectName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? objectName
-        let endpoint = "https://storage.googleapis.com/storage/v1/b/\(bucket)/o/\(encodedName)"
-        guard let url = URL(string: endpoint) else { return }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-
-        _ = try await URLSession.shared.data(for: request)
-    }
-
-    // MARK: - Batch Recognize (long audio via GCS)
-
-    private func transcribeBatch(gcsURI: String, accessToken: String, language: String) async throws -> TranscriptData {
-        let recognizer = "projects/\(serviceAccount.projectId)/locations/\(location)/recognizers/_"
-        let endpoint = "https://\(location)-speech.googleapis.com/v2/\(recognizer):batchRecognize"
-        guard let url = URL(string: endpoint) else {
-            throw ChirpError.invalidEndpoint
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 600
-
-        let body: [String: Any] = [
-            "config": [
-                "languageCodes": [language],
-                "model": model,
-                "features": [
-                    "enableWordTimeOffsets": true
-                ],
-                "autoDecodingConfig": [String: Any]()
-            ],
-            "files": [
-                ["uri": gcsURI]
-            ],
-            "recognitionOutputConfig": [
-                "inlineResponseConfig": [String: Any]()
-            ]
-        ]
-
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw ChirpError.invalidResponse
-        }
-
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw ChirpError.apiError(statusCode: httpResponse.statusCode, body: errorBody)
-        }
-
-        // Parse the operation response
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let operationName = json["name"] as? String else {
-            throw ChirpError.parseError("No operation name in batch response")
-        }
-
-        // If already done (unlikely for batch), parse immediately
-        if json["done"] as? Bool == true {
-            return try parseBatchOperationResult(json, gcsURI: gcsURI)
-        }
-
-        // Poll for completion
-        return try await pollOperation(name: operationName, accessToken: accessToken, gcsURI: gcsURI)
-    }
-
-    private func pollOperation(name: String, accessToken: String, gcsURI: String) async throws -> TranscriptData {
-        let endpoint = "https://\(location)-speech.googleapis.com/v2/\(name)"
-        guard let url = URL(string: endpoint) else {
-            throw ChirpError.invalidEndpoint
-        }
-
-        var delay: Duration = .seconds(5)
-        let maxAttempts = 120 // 10 minutes max with backoff
-
-        for _ in 0..<maxAttempts {
-            try await Task.sleep(for: delay)
-
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                let errorBody = String(data: data, encoding: .utf8) ?? "Unknown"
-                throw ChirpError.apiError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0, body: "Poll failed: \(errorBody)")
-            }
-
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw ChirpError.parseError("Invalid poll response")
-            }
-
-            if json["done"] as? Bool == true {
-                // Check for error
-                if let error = json["error"] as? [String: Any] {
-                    let code = error["code"] as? Int ?? 0
-                    let message = error["message"] as? String ?? "Unknown error"
-                    throw ChirpError.apiError(statusCode: code, body: "Batch transcription failed: \(message)")
-                }
-                return try parseBatchOperationResult(json, gcsURI: gcsURI)
-            }
-
-            // Exponential backoff, cap at 15 seconds
-            let nextDelay = Duration.seconds(delay.components.seconds * 3 / 2)
-            delay = nextDelay < .seconds(15) ? nextDelay : .seconds(15)
-        }
-
-        throw ChirpError.parseError("Batch transcription timed out after polling")
     }
 
     // MARK: - OAuth2 JWT Auth
@@ -405,70 +403,21 @@ final class ChirpClient: Sendable {
         return parseResultsArray(results)
     }
 
-    /// Parse a completed BatchRecognize operation result.
-    private func parseBatchOperationResult(_ json: [String: Any], gcsURI: String) throws -> TranscriptData {
-        guard let responseObj = json["response"] as? [String: Any],
-              let resultsMap = responseObj["results"] as? [String: Any] else {
-            throw ChirpError.parseError("No results in batch response")
-        }
-
-        // The results are keyed by the input GCS URI
-        guard let fileResult = resultsMap[gcsURI] as? [String: Any],
-              let transcript = fileResult["transcript"] as? [String: Any],
-              let results = transcript["results"] as? [[String: Any]] else {
-            // Try first key if exact URI match fails
-            if let firstValue = resultsMap.values.first as? [String: Any],
-               let transcript = firstValue["transcript"] as? [String: Any],
-               let results = transcript["results"] as? [[String: Any]] {
-                return parseResultsArray(results)
-            }
-            throw ChirpError.parseError("No transcript in batch results for \(gcsURI)")
-        }
-
-        return parseResultsArray(results)
-    }
-
-    /// Shared parser for the results array (same structure in both sync and batch).
-    ///
-    /// Chirp batch API sometimes returns word timestamps that jump backward —
-    /// either between result blocks or within a single block's word list. This
-    /// happens when audio is internally chunked and offsets reset to 0 for a new
-    /// chunk. We detect any backward jump and apply an offset correction so all
-    /// word timestamps are monotonically increasing (absolute audio time).
+    /// Parse the results array from a sync Recognize response.
     private func parseResultsArray(_ results: [[String: Any]]) -> TranscriptData {
         var words: [TranscriptWord] = []
         var fullTextParts: [String] = []
 
-        // Log raw structure for diagnostics
-        captionLog("[ChirpClient] parseResultsArray: \(results.count) result blocks")
-
-        for (blockIdx, result) in results.enumerated() {
+        for result in results {
             guard let alternatives = result["alternatives"] as? [[String: Any]],
                   let alternative = alternatives.first else { continue }
 
             if let transcript = alternative["transcript"] as? String {
                 fullTextParts.append(transcript)
-                captionLog("[ChirpClient] Block \(blockIdx) transcript: \"\(transcript.prefix(80))\"")
-            }
-
-            // Log resultEndOffset if present (tells us the chunk boundary)
-            if let reo = result["resultEndOffset"] {
-                captionLog("[ChirpClient] Block \(blockIdx) resultEndOffset: \(reo)")
             }
 
             guard let wordInfos = alternative["words"] as? [[String: Any]], !wordInfos.isEmpty else { continue }
 
-            // Log raw word timestamps for this block
-            for (wi, wordInfo) in wordInfos.enumerated() {
-                let w = wordInfo["word"] as? String ?? "?"
-                let so = wordInfo["startOffset"]
-                let eo = wordInfo["endOffset"]
-                if wi < 3 || wi == wordInfos.count - 1 {
-                    captionLog("[ChirpClient] Block \(blockIdx) word[\(wi)]: '\(w)' startOffset=\(so ?? "nil") endOffset=\(eo ?? "nil")")
-                }
-            }
-
-            // Parse raw timestamps and collect into words list
             for wordInfo in wordInfos {
                 let word = wordInfo["word"] as? String ?? ""
                 let startTime = parseDurationValue(wordInfo["startOffset"])
@@ -481,59 +430,6 @@ final class ChirpClient: Sendable {
                     confidence: confidence
                 ))
             }
-        }
-
-        // Fix chunk-relative timestamps from Chirp.
-        //
-        // Chirp sometimes returns a section of words with timestamps that reset
-        // to 0 (or nil → parsed as 0) mid-stream. We detect this as a backward
-        // jump in startTime. The offset is applied only while raw timestamps
-        // remain below the absolute high-water mark. Once raw timestamps naturally
-        // exceed the high-water mark again, we stop offsetting — those are absolute.
-        var absoluteHighWater: Double = 0  // highest raw startTime known to be absolute
-        var inChunkSection = false
-        var chunkOffset: Double = 0
-
-        for i in 0..<words.count {
-            let rawStart = words[i].startTime
-            let rawEnd = words[i].endTime
-
-            if !inChunkSection {
-                if i > 0 && rawStart < absoluteHighWater - 0.5 {
-                    // Backward jump → entering chunk-relative section
-                    inChunkSection = true
-                    chunkOffset = absoluteHighWater
-                    captionLog("[ChirpClient] Chunk section START at word[\(i)] '\(words[i].word)': rawStart=\(rawStart), absoluteHighWater=\(absoluteHighWater), chunkOffset=\(chunkOffset)")
-                } else {
-                    absoluteHighWater = max(absoluteHighWater, rawStart)
-                }
-            }
-
-            if inChunkSection {
-                if rawStart >= absoluteHighWater {
-                    // Raw timestamp exceeds the absolute high-water mark →
-                    // back to absolute timestamps, stop offsetting
-                    inChunkSection = false
-                    chunkOffset = 0
-                    absoluteHighWater = max(absoluteHighWater, rawStart)
-                    captionLog("[ChirpClient] Chunk section END at word[\(i)] '\(words[i].word)': rawStart=\(rawStart) >= absoluteHighWater=\(absoluteHighWater)")
-                    // No offset for this word
-                } else {
-                    // Still in chunk-relative section — offset the startTime.
-                    // For endTime: only offset if it's also below the high-water
-                    // mark. If endTime > highWater, it's already absolute.
-                    let adjustedStart = rawStart + chunkOffset
-                    let adjustedEnd = rawEnd > absoluteHighWater ? rawEnd : rawEnd + chunkOffset
-
-                    words[i] = TranscriptWord(
-                        word: words[i].word,
-                        startTime: adjustedStart,
-                        endTime: adjustedEnd,
-                        confidence: words[i].confidence
-                    )
-                }
-            }
-            // else: absolute word, no modification needed
         }
 
         // Fix invalid endTimes:
@@ -560,7 +456,7 @@ final class ChirpClient: Sendable {
             }
         }
 
-        captionLog("[ChirpClient] Final words: \(words.count), chunkOffset=\(chunkOffset), inChunkSection=\(inChunkSection)")
+        captionLog("[ChirpClient] Final words: \(words.count)")
         for (i, w) in words.prefix(10).enumerated() {
             captionLog("[ChirpClient] word[\(i)]: '\(w.word)' \(round(w.startTime * 1000) / 1000)-\(round(w.endTime * 1000) / 1000)")
         }
@@ -604,6 +500,7 @@ final class ChirpClient: Sendable {
 
         return 0
     }
+
 }
 
 enum ChirpError: LocalizedError {
