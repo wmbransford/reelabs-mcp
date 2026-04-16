@@ -73,6 +73,29 @@ package enum RenderTool {
                     _ = transcript // suppress unused warning
                 }
                 transcriptData = remapMultiSourceTranscript(sourceTranscripts: sourceTranscripts, segments: spec.segments)
+
+                // Also remap words from overlay sources not used in segments.
+                // This handles the screen-recording layout workflow where the speaker cam
+                // is an overlay (not a segment) but has the transcript for captions.
+                if let overlays = spec.overlays {
+                    let segmentSourceIds = Set(spec.segments.map { $0.sourceId })
+                    let overlayWords = remapOverlaySources(
+                        sourceTranscripts: sourceTranscripts,
+                        overlays: overlays,
+                        excludeSourceIds: segmentSourceIds
+                    )
+                    if !overlayWords.isEmpty, let td = transcriptData {
+                        var allWords = td.words + overlayWords
+                        allWords.sort { $0.startTime < $1.startTime }
+                        let overlayText = overlayWords.map { $0.word }.joined(separator: " ")
+                        let fullText = td.fullText.isEmpty ? overlayText : td.fullText + " " + overlayText
+                        transcriptData = TranscriptData(
+                            words: allWords,
+                            fullText: fullText,
+                            durationSeconds: td.durationSeconds
+                        )
+                    }
+                }
             } else if let captionConfig = spec.captions, let transcriptId = captionConfig.transcriptId {
                 // Legacy single-transcript mode
                 guard let transcript = try transcriptRepo.get(id: Int64(transcriptId)) else {
@@ -133,9 +156,10 @@ package enum RenderTool {
                 return .init(content: [.text(text: "Caption error: no words fall within segment time ranges. Check segment boundaries.", annotations: nil, _meta: nil)], isError: true)
             }
 
-            // Non-video overlays (image, color, text) automatically suppress captions
+            // Text and image overlays suppress captions in their time range.
+            // Bare color overlays (e.g. layout backgrounds) do NOT suppress captions.
             let captionExclusionZones: [ClosedRange<Double>] = (spec.overlays ?? [])
-                .filter { $0.sourceId == nil }
+                .filter { $0.sourceId == nil && ($0.text != nil || $0.imagePath != nil) }
                 .map { $0.start...$0.end }
 
             let captionConfigForRender = resolvedCaptionConfig
@@ -364,6 +388,41 @@ func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], s
         fullText: fullTextParts.joined(separator: " "),
         durationSeconds: compositionTime
     )
+}
+
+/// Remap words from overlay sources that aren't used in any segment.
+/// This handles screen-recording layouts where the speaker cam is an overlay with a transcript.
+/// Each overlay defines a composition-time window and a sourceStart offset into the source file.
+func remapOverlaySources(
+    sourceTranscripts: [String: [TranscriptWord]],
+    overlays: [Overlay],
+    excludeSourceIds: Set<String>
+) -> [TranscriptWord] {
+    var result: [TranscriptWord] = []
+    for overlay in overlays {
+        guard let overlaySourceId = overlay.sourceId,
+              !excludeSourceIds.contains(overlaySourceId),
+              let words = sourceTranscripts[overlaySourceId] else { continue }
+        let srcStart = overlay.sourceStart ?? 0
+        let overlayDuration = overlay.end - overlay.start
+        let srcEnd = srcStart + overlayDuration
+        for word in words {
+            if word.startTime >= srcStart && word.startTime < srcEnd {
+                let newStart = overlay.start + (word.startTime - srcStart)
+                let clampedEnd = min(word.endTime, srcEnd)
+                let newEnd = overlay.start + (clampedEnd - srcStart)
+                if newEnd <= newStart { continue }
+                result.append(TranscriptWord(
+                    word: word.word,
+                    startTime: newStart,
+                    endTime: newEnd,
+                    confidence: word.confidence
+                ))
+            }
+        }
+    }
+    captionLog("[remapOverlaySources] Remapped \(result.count) words from overlay sources (excluded: \(excludeSourceIds.sorted()))")
+    return result
 }
 
 private func mergeCaptionConfig(base: CaptionConfig, override: CaptionConfig?) -> CaptionConfig {

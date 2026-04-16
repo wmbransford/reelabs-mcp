@@ -30,8 +30,8 @@ package enum SilenceRemoveTool {
             return .init(content: [.text(text: "Missing required argument: transcript_id", annotations: nil, _meta: nil)], isError: true)
         }
 
-        let gapThreshold = arguments?["gap_threshold"]?.doubleValue ?? 0.4
-        let padding = arguments?["padding"]?.doubleValue ?? 0.15
+        let gapThreshold = extractDouble(arguments?["gap_threshold"]) ?? 0.4
+        let padding = extractDouble(arguments?["padding"]) ?? 0.15
 
         do {
             guard let transcript = try transcriptRepo.get(id: transcriptId) else {

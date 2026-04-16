@@ -14,6 +14,20 @@ func encode<T: Encodable>(_ value: T) -> String {
     return json
 }
 
+func extractDouble(_ value: Value?) -> Double? {
+    guard let value else { return nil }
+    if let d = value.doubleValue {
+        return d
+    }
+    if let i = value.intValue {
+        return Double(i)
+    }
+    if let s = value.stringValue, let d = Double(s) {
+        return d
+    }
+    return nil
+}
+
 func extractInt64(_ value: Value?) -> Int64? {
     guard let value else { return nil }
     if let i = value.intValue {

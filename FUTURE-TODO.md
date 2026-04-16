@@ -2,14 +2,8 @@
 
 ## Export Pipeline Optimizations
 
-### 1. Smart Compositor Bypass (High Impact, Low Risk)
-**Problem:** `CompositionBuilder` always sets `customVideoCompositorClass`, even for simple segment concatenation. This forces a two-pass export when captions are present — the compositor runs on every frame just to copy it unchanged, then a second pass applies captions.
-
-**Fix:** After building instructions, check if any actually need the custom compositor (crossfades, overlays, keyframes, transforms). If not, generate standard `AVMutableVideoCompositionLayerInstruction` objects instead. ExportService's single-pass path already handles this (lines 178-238) — it's just currently unreachable.
-
-**Impact:** ~40-50% speedup for captions-only renders (eliminates second decode/encode cycle + temp file).
-
-**Files:** `CompositionBuilder.swift` (line 640-648)
+### ~~1. Smart Compositor Bypass~~ DONE (2026-04-15)
+Solved differently: captions are now pre-rendered as CIImages and composited per-frame inside `VideoCompositor`, eliminating the two-pass export entirely. Result: ~5x speedup (3min → 34s on 4K). See `CaptionOverlay` struct in `CaptionLayer.swift`.
 
 ### 2. Audio Passthrough
 **Problem:** Audio is always decoded to PCM and re-encoded to AAC, even when no mixing/volume changes are applied.

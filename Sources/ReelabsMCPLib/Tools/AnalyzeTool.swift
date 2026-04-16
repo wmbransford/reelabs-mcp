@@ -83,7 +83,7 @@ package enum AnalyzeTool {
             return .init(content: [.text(text: "File not found: \(path)", annotations: nil, _meta: nil)], isError: true)
         }
 
-        let sampleFps = arguments?["sample_fps"]?.doubleValue ?? 1.0
+        let sampleFps = extractDouble(arguments?["sample_fps"]) ?? 1.0
         let assetId = extractInt64(arguments?["asset_id"])
 
         // Get duration
@@ -182,8 +182,8 @@ package enum AnalyzeTool {
 
         var scenes: [VisualScene] = []
         for (index, sceneValue) in scenesValue.enumerated() {
-            guard let startTime = sceneValue.objectValue?["start_time"]?.doubleValue,
-                  let endTime = sceneValue.objectValue?["end_time"]?.doubleValue,
+            guard let startTime = extractDouble(sceneValue.objectValue?["start_time"]),
+                  let endTime = extractDouble(sceneValue.objectValue?["end_time"]),
                   let description = sceneValue.objectValue?["description"]?.stringValue else {
                 return .init(content: [.text(text: "Scene \(index) missing required fields: start_time, end_time, description", annotations: nil, _meta: nil)], isError: true)
             }

@@ -311,171 +311,6 @@ final class ExportService: Sendable {
         return ExportResult(captionsApplied: didApplyCaptions, captionSublayerCount: captionSublayerCount)
     }
 
-    // MARK: - Two-Pass Export
-
-    /// When a custom compositor (overlays, transforms, crossfades) conflicts with animationTool
-    /// (caption burn-in), render in two passes:
-    /// - Pass 1: Export with custom compositor to a temp file (no captions)
-    /// - Pass 2: Load temp file, apply captions via animationTool, export to final output
-    private func twoPassExport(
-        composition: AVMutableComposition,
-        videoComposition: AVVideoComposition,
-        audioMix: AVMutableAudioMix?,
-        outputURL: URL,
-        captionConfig: CaptionConfig,
-        transcriptData: TranscriptData,
-        renderSize: CGSize,
-        quality: QualityConfig?,
-        captionExclusionZones: [ClosedRange<Double>] = [],
-        profiler: RenderProfiler? = nil
-    ) async throws -> ExportResult {
-        let codec = quality?.codec ?? .h264
-        let preset = Self.exportPreset(for: renderSize, codec: codec)
-
-        // Temp file in Application Support
-        let appSupport = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let tmpDir = appSupport.appendingPathComponent("ReelabsMCP/tmp", isDirectory: true)
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        let tempURL = tmpDir.appendingPathComponent("pass1_\(UUID().uuidString).mp4")
-
-        defer {
-            try? FileManager.default.removeItem(at: tempURL)
-            captionLog("[TwoPass] Cleaned up temp file")
-        }
-
-        // === PASS 1: Custom compositor export via AVAssetReader+Writer (no captions) ===
-        // AVAssetExportSession with dimension-specific presets rejects compositions
-        // containing mixed-codec tracks (e.g. H.264 main + HEVC screen recording overlay)
-        // with error -11841. AVAssetReader+Writer bypasses this preset validation.
-        captionLog("[TwoPass] === PASS 1 START (reader/writer) === temp=\(tempURL.lastPathComponent)")
-
-        let pass1Start = CFAbsoluteTimeGetCurrent()
-        try await readerWriterExport(
-            composition: composition,
-            videoComposition: videoComposition,
-            audioMix: audioMix,
-            outputURL: tempURL,
-            renderSize: renderSize,
-            quality: quality
-        )
-        profiler?.record("pass1_reader_writer", seconds: CFAbsoluteTimeGetCurrent() - pass1Start)
-        captionLog("[TwoPass] Pass 1 complete")
-
-        // === PASS 2: Caption burn-in via animationTool ===
-        captionLog("[TwoPass] === PASS 2 START ===")
-
-        let tempAsset = AVURLAsset(url: tempURL)
-        let pass2Comp = AVMutableComposition()
-
-        // Insert video track from pass 1 output
-        guard let srcVideoTrack = try await tempAsset.loadTracks(withMediaType: .video).first else {
-            throw ExportError.exportFailed("Two-pass: temp file has no video track")
-        }
-        guard let p2VideoTrack = pass2Comp.addMutableTrack(
-            withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
-        ) else {
-            throw ExportError.exportFailed("Two-pass: failed to add video track to pass 2 composition")
-        }
-        let duration = try await tempAsset.load(.duration)
-        try p2VideoTrack.insertTimeRange(
-            CMTimeRange(start: .zero, duration: duration), of: srcVideoTrack, at: .zero
-        )
-
-        // Insert audio tracks from pass 1 output
-        let srcAudioTracks = try await tempAsset.loadTracks(withMediaType: .audio)
-        for srcAudioTrack in srcAudioTracks {
-            if let p2AudioTrack = pass2Comp.addMutableTrack(
-                withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
-            ) {
-                try p2AudioTrack.insertTimeRange(
-                    CMTimeRange(start: .zero, duration: duration), of: srcAudioTrack, at: .zero
-                )
-            }
-        }
-
-        let totalDuration = CMTimeGetSeconds(duration)
-        captionLog("[TwoPass] Pass 2 composition: duration=\(round(totalDuration * 100) / 100)s audio=\(srcAudioTracks.count)")
-
-        // Build caption layer hierarchy
-        let captionBuildStart = CFAbsoluteTimeGetCurrent()
-        let captionLayer = CaptionLayer.createOverlay(
-            transcriptData: transcriptData,
-            config: captionConfig,
-            videoSize: renderSize,
-            totalDuration: totalDuration,
-            exclusionZones: captionExclusionZones
-        )
-        profiler?.record("caption_layer_build", seconds: CFAbsoluteTimeGetCurrent() - captionBuildStart)
-        let captionSublayerCount = captionLayer.sublayers?.count ?? 0
-        captionLog("[TwoPass] Caption layer: sublayers=\(captionSublayerCount)")
-
-        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
-
-        let videoLayer = CALayer()
-        videoLayer.frame = CGRect(origin: .zero, size: renderSize)
-        videoLayer.contentsScale = scale
-
-        let parentLayer = CALayer()
-        parentLayer.frame = CGRect(origin: .zero, size: renderSize)
-        parentLayer.isGeometryFlipped = true
-        parentLayer.contentsScale = scale
-        parentLayer.addSublayer(videoLayer)
-        parentLayer.addSublayer(captionLayer)
-
-        let animToolConfig = AVVideoCompositionCoreAnimationTool.Configuration(
-            postProcessingAsVideoLayer: videoLayer,
-            containingLayer: parentLayer
-        )
-        let animTool = AVVideoCompositionCoreAnimationTool(configuration: animToolConfig)
-
-        // Standard video composition — NO customVideoCompositorClass
-        let pass2VC = AVMutableVideoComposition()
-        pass2VC.animationTool = animTool
-        pass2VC.renderSize = renderSize
-
-        // Match frame rate from pass 1 output
-        let nominalFPS = try await srcVideoTrack.load(.nominalFrameRate)
-        let fps = nominalFPS > 0 ? nominalFPS : 30.0
-        pass2VC.frameDuration = CompositionBuilder.preciseFrameDuration(fps: Double(fps))
-        captionLog("[TwoPass] Frame rate: \(fps) fps")
-
-        // Standard layer instruction (no custom compositor needed)
-        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: p2VideoTrack)
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
-        instruction.layerInstructions = [layerInstruction]
-        pass2VC.instructions = [instruction]
-
-        // Export pass 2 to final output
-        guard let pass2Session = AVAssetExportSession(asset: pass2Comp, presetName: preset) else {
-            throw ExportError.exportFailed("Two-pass: failed to create pass 2 session")
-        }
-        pass2Session.videoComposition = pass2VC
-
-        if FileManager.default.fileExists(atPath: outputURL.path) {
-            try FileManager.default.removeItem(at: outputURL)
-        }
-
-        do {
-            let pass2Start = CFAbsoluteTimeGetCurrent()
-            try await pass2Session.export(to: outputURL, as: .mp4)
-            profiler?.record("pass2_caption_export", seconds: CFAbsoluteTimeGetCurrent() - pass2Start)
-        } catch {
-            let nsError = error as NSError
-            throw ExportError.exportFailed(
-                "Two-pass pass 2 failed: domain=\(nsError.domain) code=\(nsError.code) \(nsError.localizedDescription)"
-            )
-        }
-
-        captionLog("[TwoPass] === TWO-PASS RENDER COMPLETE ===")
-        return ExportResult(captionsApplied: true, captionSublayerCount: captionSublayerCount)
-    }
-
     // MARK: - Reader/Writer Export
 
     /// Export a composition with a custom compositor using AVAssetReader + AVAssetWriter.
@@ -545,7 +380,7 @@ final class ExportService: Sendable {
         videoOutput.videoComposition = videoComposition
         guard reader.canAdd(videoOutput) else {
             captionLog("[ReaderWriter] ERROR: Cannot add video output to reader")
-            throw ExportError.exportFailed("Two-pass pass 1: cannot add video output to reader")
+            throw ExportError.exportFailed("Reader/Writer export: cannot add video output to reader")
         }
         reader.add(videoOutput)
 
@@ -591,7 +426,7 @@ final class ExportService: Sendable {
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = false
         guard writer.canAdd(videoInput) else {
-            throw ExportError.exportFailed("Two-pass pass 1: cannot add video input to writer")
+            throw ExportError.exportFailed("Reader/Writer export: cannot add video input to writer")
         }
         writer.add(videoInput)
 
@@ -623,7 +458,7 @@ final class ExportService: Sendable {
                 captionLog("[ReaderWriter]   underlying: domain=\(underlying.domain) code=\(underlying.code) desc=\(underlying.localizedDescription)")
             }
             throw ExportError.exportFailed(
-                "Two-pass pass 1 reader failed on start: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) underlying=\(underlying?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
+                "Reader/Writer export reader failed on start: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) underlying=\(underlying?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
             )
         }
 
@@ -657,7 +492,7 @@ final class ExportService: Sendable {
                 captionLog("[ReaderWriter]   underlying: domain=\(underlying.domain) code=\(underlying.code) desc=\(underlying.localizedDescription)")
             }
             throw ExportError.exportFailed(
-                "Two-pass pass 1 reader failed: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) underlying=\(underlying?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
+                "Reader/Writer export reader failed: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) underlying=\(underlying?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
             )
         }
 
@@ -671,7 +506,7 @@ final class ExportService: Sendable {
                 captionLog("[ReaderWriter]   underlying: domain=\(underlying.domain) code=\(underlying.code) desc=\(underlying.localizedDescription)")
             }
             throw ExportError.exportFailed(
-                "Two-pass pass 1 writer failed: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) underlying=\(underlying?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
+                "Reader/Writer export writer failed: domain=\(err?.domain ?? "?") code=\(err?.code ?? 0) underlying=\(underlying?.code ?? 0) \(err?.localizedDescription ?? "unknown")"
             )
         }
 

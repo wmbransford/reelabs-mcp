@@ -51,7 +51,7 @@ package enum GraphicTool {
             return .init(content: [.text(text: "height must be between 1 and 7680", annotations: nil, _meta: nil)], isError: true)
         }
 
-        let timeout = arguments?["timeout"]?.doubleValue ?? 10.0
+        let timeout = extractDouble(arguments?["timeout"]) ?? 10.0
 
         let outputPath: String
         if let provided = arguments?["output_path"]?.stringValue {

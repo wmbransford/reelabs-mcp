@@ -164,17 +164,17 @@ private struct LayoutStyle {
 
     init(from args: [String: Value]?) {
         let style = args?["style"]?.objectValue
-        cornerRadius = style?["cornerRadius"]?.doubleValue ?? Self.default.cornerRadius
-        padding = style?["padding"]?.doubleValue ?? Self.default.padding
+        cornerRadius = extractDouble(style?["cornerRadius"]) ?? Self.default.cornerRadius
+        padding = extractDouble(style?["padding"]) ?? Self.default.padding
         background = style?["background"]?.stringValue ?? Self.default.background
-        transitionDuration = style?["transitionDuration"]?.doubleValue ?? Self.default.transitionDuration
+        transitionDuration = extractDouble(style?["transitionDuration"]) ?? Self.default.transitionDuration
 
         if let crop = style?["speakerCrop"]?.objectValue {
             speakerCrop = CropRect(
-                x: crop["x"]?.doubleValue ?? 0,
-                y: crop["y"]?.doubleValue ?? 0,
-                width: crop["width"]?.doubleValue ?? 1,
-                height: crop["height"]?.doubleValue ?? 1
+                x: extractDouble(crop["x"]) ?? 0,
+                y: extractDouble(crop["y"]) ?? 0,
+                width: extractDouble(crop["width"]) ?? 1,
+                height: extractDouble(crop["height"]) ?? 1
             )
         } else {
             speakerCrop = nil
@@ -303,10 +303,10 @@ package enum LayoutTool {
             guard LayoutPresets.validNames.contains(layout) else {
                 return error("timeline[\(i)]: unknown layout \"\(layout)\". Valid: \(LayoutPresets.validNames.sorted().joined(separator: ", "))")
             }
-            guard let start = obj?["start"]?.doubleValue else {
+            guard let start = extractDouble(obj?["start"]) else {
                 return error("timeline[\(i)]: missing start")
             }
-            guard let end = obj?["end"]?.doubleValue else {
+            guard let end = extractDouble(obj?["end"]) else {
                 return error("timeline[\(i)]: missing end")
             }
             guard end > start else {
@@ -352,6 +352,7 @@ package enum LayoutTool {
                     "sourceId": screenId,
                     "start": entry.start,
                     "end": entry.end,
+                    "sourceStart": entry.start,
                     "x": preset.screen.x,
                     "y": preset.screen.y,
                     "width": preset.screen.width,
@@ -373,6 +374,7 @@ package enum LayoutTool {
                     "sourceId": speakerId,
                     "start": entry.start,
                     "end": entry.end,
+                    "sourceStart": entry.start,
                     "x": preset.speaker.x,
                     "y": preset.speaker.y,
                     "width": preset.speaker.width,
