@@ -4,13 +4,13 @@ import MCP
 package enum RerenderTool {
     package static let tool = Tool(
         name: "reelabs_rerender",
-        description: "Re-render a previous render with partial overrides. Loads the stored spec, deep-merges your overrides, and re-renders. Useful for tweaking captions, quality, or overlays without resending the full spec.",
+        description: "Re-render a previous render with partial overrides. Loads the stored spec, deep-merges your overrides, and re-renders. render_id is a compound 'project/render' string.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
                 "render_id": .object([
-                    "type": .string("integer"),
-                    "description": .string("ID of the previous render to base on (from reelabs_render response)")
+                    "type": .string("string"),
+                    "description": .string("Compound 'project/render' ID (from reelabs_render response)")
                 ]),
                 "overrides": .object([
                     "type": .string("object"),
@@ -18,7 +18,7 @@ package enum RerenderTool {
                 ]),
                 "output_path": .object([
                     "type": .string("string"),
-                    "description": .string("Override output path. If omitted, auto-generates a new path based on the original.")
+                    "description": .string("Override output path. If omitted, auto-generates based on the original.")
                 ])
             ]),
             "required": .array([.string("render_id")])
@@ -27,70 +27,71 @@ package enum RerenderTool {
 
     package static func handle(
         arguments: [String: Value]?,
-        renderRepo: RenderRepository,
-        transcriptRepo: TranscriptRepository,
-        presetRepo: PresetRepository
+        renderStore: RenderStore,
+        transcriptStore: TranscriptStore,
+        projectStore: ProjectStore,
+        presetStore: PresetStore
     ) async -> CallTool.Result {
-        guard let renderId = extractInt64(arguments?["render_id"]) else {
+        guard let id = arguments?["render_id"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: render_id", annotations: nil, _meta: nil)], isError: true)
+        }
+        guard let parts = DataPaths.splitCompoundId(id) else {
+            return .init(content: [.text(text: "Invalid render_id. Expected 'project/render'.", annotations: nil, _meta: nil)], isError: true)
         }
 
         do {
-            // Load the original render's spec from DB
-            guard let row = try renderRepo.get(id: renderId) else {
-                return .init(content: [.text(text: "Render \(renderId) not found in database", annotations: nil, _meta: nil)], isError: true)
+            guard let loaded = try renderStore.get(project: parts.project, render: parts.source) else {
+                return .init(content: [.text(text: "Render not found: \(id)", annotations: nil, _meta: nil)], isError: true)
+            }
+            guard let specJson = loaded.specJson else {
+                return .init(content: [.text(text: "Render \(id) has no embedded spec", annotations: nil, _meta: nil)], isError: true)
             }
 
-            guard let specJson: String = row["specJson"] else {
-                return .init(content: [.text(text: "Render \(renderId) has no stored spec", annotations: nil, _meta: nil)], isError: true)
-            }
-
-            // Decode the base spec
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             guard let specData = specJson.data(using: .utf8) else {
-                return .init(content: [.text(text: "Render \(renderId) stored spec contains invalid encoding", annotations: nil, _meta: nil)], isError: true)
+                return .init(content: [.text(text: "Render \(id) spec contains invalid encoding", annotations: nil, _meta: nil)], isError: true)
             }
             var baseSpec = try decoder.decode(RenderSpec.self, from: specData)
 
-            // Apply overrides if provided
             if let overrides = arguments?["overrides"] {
                 let overrideData = try JSONSerialization.data(withJSONObject: overrides.toJSONObject())
                 let overrideSpec = try decoder.decode(PartialRenderSpec.self, from: overrideData)
                 baseSpec = mergeRenderSpec(base: baseSpec, overrides: overrideSpec)
             }
 
-            // Override output path if provided explicitly or generate one
             if let outputPathValue = arguments?["output_path"], let outputPath = outputPathValue.stringValue {
                 baseSpec = baseSpec.withOutputPath(outputPath)
             } else if arguments?["overrides"] != nil {
-                // Auto-generate a new output path to avoid overwriting
                 let originalPath = baseSpec.outputPath
                 let url = URL(fileURLWithPath: originalPath)
                 let stem = url.deletingPathExtension().lastPathComponent
                 let ext = url.pathExtension
                 let dir = url.deletingLastPathComponent().path
-                let newPath = "\(dir)/\(stem)_rerender\(renderId).\(ext)"
+                let newPath = "\(dir)/\(stem)_rerender.\(ext)"
                 baseSpec = baseSpec.withOutputPath(newPath)
             }
 
-            // Delegate to RenderTool's handle by re-encoding the merged spec
+            // Re-encode merged spec and delegate to RenderTool
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             let mergedData = try encoder.encode(baseSpec)
             let mergedJson = try JSONSerialization.jsonObject(with: mergedData)
             let specValue = Value(mergedJson)
 
-            var args: [String: Value] = ["spec": specValue]
-            if let projectId = arguments?["project_id"] {
-                args["project_id"] = projectId
-            }
+            var args: [String: Value] = [
+                "spec": specValue,
+                "project": .string(parts.project)
+            ]
+            // Preserve the original render's slug as the base for the new render
+            args["slug"] = .string(loaded.record.slug + "-rerender")
 
             return await RenderTool.handle(
                 arguments: args,
-                renderRepo: renderRepo,
-                transcriptRepo: transcriptRepo,
-                presetRepo: presetRepo
+                renderStore: renderStore,
+                transcriptStore: transcriptStore,
+                projectStore: projectStore,
+                presetStore: presetStore
             )
         } catch let decodingError as DecodingError {
             let detail: String
@@ -123,8 +124,6 @@ private struct PartialRenderSpec: Codable {
     let fps: Double?
     let outputPath: String?
 }
-
-// MARK: - Deep merge
 
 private func mergeRenderSpec(base: RenderSpec, overrides: PartialRenderSpec) -> RenderSpec {
     RenderSpec(
@@ -181,8 +180,6 @@ private func mergeQuality(base: QualityConfig?, override: QualityConfig?) -> Qua
         quality: o.quality ?? b.quality
     )
 }
-
-// MARK: - Value conversion helper
 
 private extension Value {
     init(_ jsonObject: Any) {

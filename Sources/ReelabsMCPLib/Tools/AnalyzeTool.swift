@@ -1,17 +1,17 @@
+import AVFoundation
 import Foundation
 import MCP
-import AVFoundation
 
 package enum AnalyzeTool {
     package static let tool = Tool(
         name: "reelabs_analyze",
-        description: "Analyze video visually. Actions: extract (path, sample_fps? — extracts frames to disk), store (analysis_id, scenes[] — persist sub-agent scene analysis), get (id — retrieve analysis + scenes).",
+        description: "Analyze video visually. Actions: extract (path, sample_fps? — extracts frames to disk), store (analysis_id, scenes[] — persist sub-agent scene analysis), get (analysis_id — retrieve analysis + scenes). analysis_id is a compound 'project/source' string.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
                 "action": .object([
                     "type": .string("string"),
-                    "description": .string("Action to perform: extract, store, get"),
+                    "description": .string("Action: extract, store, get"),
                     "enum": .array([.string("extract"), .string("store"), .string("get")])
                 ]),
                 "path": .object([
@@ -22,17 +22,13 @@ package enum AnalyzeTool {
                     "type": .string("number"),
                     "description": .string("Frames per second to sample (default: 1.0)")
                 ]),
-                "asset_id": .object([
-                    "type": .string("integer"),
-                    "description": .string("Optional asset ID to link analysis to (for extract)")
+                "project": .object([
+                    "type": .string("string"),
+                    "description": .string("Optional project slug for extract. Derived from parent dir if omitted.")
                 ]),
                 "analysis_id": .object([
-                    "type": .string("integer"),
-                    "description": .string("Analysis ID (for store, get)")
-                ]),
-                "id": .object([
-                    "type": .string("integer"),
-                    "description": .string("Analysis ID (alias for analysis_id, for get)")
+                    "type": .string("string"),
+                    "description": .string("Compound 'project/source' ID (for store, get)")
                 ]),
                 "scenes": .object([
                     "type": .string("array"),
@@ -53,7 +49,11 @@ package enum AnalyzeTool {
         ])
     )
 
-    package static func handle(arguments: [String: Value]?, analysisRepo: VisualAnalysisRepository) async -> CallTool.Result {
+    package static func handle(
+        arguments: [String: Value]?,
+        analysisStore: AnalysisStore,
+        projectStore: ProjectStore
+    ) async -> CallTool.Result {
         guard let action = arguments?["action"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: action", annotations: nil, _meta: nil)], isError: true)
         }
@@ -61,11 +61,11 @@ package enum AnalyzeTool {
         do {
             switch action {
             case "extract":
-                return try await handleExtract(arguments: arguments, repo: analysisRepo)
+                return try await handleExtract(arguments: arguments, analysisStore: analysisStore, projectStore: projectStore)
             case "store":
-                return try handleStore(arguments: arguments, repo: analysisRepo)
+                return try handleStore(arguments: arguments, store: analysisStore)
             case "get":
-                return try handleGet(arguments: arguments, repo: analysisRepo)
+                return try handleGet(arguments: arguments, store: analysisStore)
             default:
                 return .init(content: [.text(text: "Unknown action: \(action). Use: extract, store, get", annotations: nil, _meta: nil)], isError: true)
             }
@@ -74,7 +74,11 @@ package enum AnalyzeTool {
         }
     }
 
-    private static func handleExtract(arguments: [String: Value]?, repo: VisualAnalysisRepository) async throws -> CallTool.Result {
+    private static func handleExtract(
+        arguments: [String: Value]?,
+        analysisStore: AnalysisStore,
+        projectStore: ProjectStore
+    ) async throws -> CallTool.Result {
         guard let path = arguments?["path"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: path", annotations: nil, _meta: nil)], isError: true)
         }
@@ -84,36 +88,40 @@ package enum AnalyzeTool {
         }
 
         let sampleFps = extractDouble(arguments?["sample_fps"]) ?? 1.0
-        let assetId = extractInt64(arguments?["asset_id"])
+        let projectSlug = arguments?["project"]?.stringValue ?? DataPaths.deriveProjectSlug(fromSourcePath: path)
+        let sourceSlug = DataPaths.deriveSourceSlug(fromSourcePath: path)
 
-        // Get duration
+        _ = try projectStore.createWithSlug(slug: projectSlug)
+
+        // Duration probe
         let asset = AVURLAsset(url: URL(fileURLWithPath: path))
         let duration = try await asset.load(.duration)
         let durationSeconds = CMTimeGetSeconds(duration)
 
-        // Create DB record
-        var analysis = VisualAnalysis(sourcePath: path, sampleFps: sampleFps, assetId: assetId)
-        analysis.durationSeconds = durationSeconds
-        analysis = try repo.create(analysis)
-
-        let analysisId = analysis.id!
-
-        // Create frames directory in the working directory (visible and user-deletable)
+        // Frames folder lives next to the data
         let framesDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("Extracted Frames", isDirectory: true)
-            .appendingPathComponent("\(analysisId)", isDirectory: true)
+            .appendingPathComponent("\(projectSlug)-\(sourceSlug)", isDirectory: true)
 
-        // Extract frames
         let frames = try await FrameExtractor.extractFrames(
             videoPath: path,
             sampleFps: sampleFps,
             outputDir: framesDir
         )
 
-        // Update record
-        try repo.update(id: analysisId, frameCount: frames.count, framesDir: framesDir.path, status: "extracted")
+        var record = AnalysisRecord(
+            slug: sourceSlug,
+            sourcePath: path,
+            status: "extracted",
+            sampleFps: sampleFps,
+            frameCount: frames.count,
+            sceneCount: 0,
+            durationSeconds: durationSeconds,
+            framesDir: framesDir.path
+        )
+        record = try analysisStore.saveRecord(project: projectSlug, source: sourceSlug, record: record)
 
-        // Build response
+        let analysisId = "\(projectSlug)/\(sourceSlug)"
         let framesJson = frames.map { frame in
             ["time": frame.time, "path": frame.path] as [String: Any]
         }
@@ -134,25 +142,19 @@ package enum AnalyzeTool {
         cut to screen recording, camera angle change, new location, graphic overlay, etc.
 
         WHAT TO OUTPUT:
-        Call reelabs_analyze with action "store" and analysis_id \(analysisId). Provide a scenes array where each scene has:
+        Call reelabs_analyze with action "store" and analysis_id "\(analysisId)". Provide a scenes array where each scene has:
         - start_time: timestamp of the first frame in the scene
         - end_time: timestamp of the last frame in the scene (or start of next scene)
-        - description: what is visually happening (1-2 sentences max). Focus on content \
-        useful for editing decisions — who/what is on screen, framing, on-screen text, \
-        visual quality issues (overexposed, blurry, etc.)
+        - description: what is visually happening (1-2 sentences max).
         - scene_type: one of "talking_head", "b_roll", "screen_recording", "title_card", \
         "transition", "demo", "interview", "other"
-        - tags: short descriptive tags for searchability (e.g. ["wide_shot", "outdoors", "product_demo"])
-
-        EFFICIENCY RULES:
-        - A 2-minute talking head with the same framing is ONE scene, not 120 frames described individually.
-        - Only create a new scene when something visually changes on screen.
-        - Typical videos have 3-15 scenes, not one per frame.
-        - If the entire video is a single static setup, that is 1 scene. That's fine.
+        - tags: short descriptive tags for searchability
         """
 
         let response: [String: Any] = [
             "analysis_id": analysisId,
+            "project": projectSlug,
+            "source": sourceSlug,
             "duration_seconds": (durationSeconds * 10).rounded() / 10,
             "frame_count": frames.count,
             "sample_fps": sampleFps,
@@ -162,78 +164,70 @@ package enum AnalyzeTool {
         ]
 
         let jsonData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
-        let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
-
-        return .init(content: [.text(text: jsonString, annotations: nil, _meta: nil)], isError: false)
+        return .init(content: [.text(text: String(data: jsonData, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
     }
 
-    private static func handleStore(arguments: [String: Value]?, repo: VisualAnalysisRepository) throws -> CallTool.Result {
-        guard let analysisId = extractInt64(arguments?["analysis_id"]) else {
+    private static func handleStore(arguments: [String: Value]?, store: AnalysisStore) throws -> CallTool.Result {
+        guard let id = arguments?["analysis_id"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: analysis_id", annotations: nil, _meta: nil)], isError: true)
         }
-
+        guard let parts = DataPaths.splitCompoundId(id) else {
+            return .init(content: [.text(text: "Invalid analysis_id. Expected 'project/source'.", annotations: nil, _meta: nil)], isError: true)
+        }
         guard let scenesValue = arguments?["scenes"]?.arrayValue else {
             return .init(content: [.text(text: "Missing required argument: scenes", annotations: nil, _meta: nil)], isError: true)
         }
 
-        guard try repo.get(id: analysisId) != nil else {
-            return .init(content: [.text(text: "Analysis not found: \(analysisId)", annotations: nil, _meta: nil)], isError: true)
+        guard try store.getRecord(project: parts.project, source: parts.source) != nil else {
+            return .init(content: [.text(text: "Analysis not found: \(id)", annotations: nil, _meta: nil)], isError: true)
         }
 
-        var scenes: [VisualScene] = []
+        var scenes: [SceneRecord] = []
         for (index, sceneValue) in scenesValue.enumerated() {
             guard let startTime = extractDouble(sceneValue.objectValue?["start_time"]),
                   let endTime = extractDouble(sceneValue.objectValue?["end_time"]),
                   let description = sceneValue.objectValue?["description"]?.stringValue else {
                 return .init(content: [.text(text: "Scene \(index) missing required fields: start_time, end_time, description", annotations: nil, _meta: nil)], isError: true)
             }
-
-            var tagsJson: String? = nil
+            let tags: [String]?
             if let tagsArray = sceneValue.objectValue?["tags"]?.arrayValue {
-                let tags = tagsArray.compactMap { $0.stringValue }
-                if let data = try? JSONEncoder().encode(tags) {
-                    tagsJson = String(data: data, encoding: .utf8)
-                }
+                tags = tagsArray.compactMap { $0.stringValue }
+            } else {
+                tags = nil
             }
-
             let sceneType = sceneValue.objectValue?["scene_type"]?.stringValue
-
-            scenes.append(VisualScene(
-                analysisId: analysisId,
+            scenes.append(SceneRecord(
                 sceneIndex: index,
                 startTime: startTime,
                 endTime: endTime,
                 description: description,
-                tags: tagsJson,
+                tags: tags,
                 sceneType: sceneType
             ))
         }
 
-        try repo.storeScenes(analysisId: analysisId, scenes: scenes)
+        try store.storeScenes(project: parts.project, source: parts.source, scenes: scenes)
 
         let response: [String: Any] = [
-            "analysis_id": analysisId,
+            "analysis_id": id,
             "scenes_stored": scenes.count,
             "status": "analyzed"
         ]
-
-        let jsonData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
-        let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
-
-        return .init(content: [.text(text: jsonString, annotations: nil, _meta: nil)], isError: false)
+        let data = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
+        return .init(content: [.text(text: String(data: data, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
     }
 
-    private static func handleGet(arguments: [String: Value]?, repo: VisualAnalysisRepository) throws -> CallTool.Result {
-        let analysisId = extractInt64(arguments?["id"]) ?? extractInt64(arguments?["analysis_id"])
-        guard let analysisId else {
-            return .init(content: [.text(text: "Missing required argument: id", annotations: nil, _meta: nil)], isError: true)
+    private static func handleGet(arguments: [String: Value]?, store: AnalysisStore) throws -> CallTool.Result {
+        guard let id = arguments?["analysis_id"]?.stringValue else {
+            return .init(content: [.text(text: "Missing required argument: analysis_id", annotations: nil, _meta: nil)], isError: true)
         }
-
-        guard let analysis = try repo.get(id: analysisId) else {
-            return .init(content: [.text(text: "Analysis not found: \(analysisId)", annotations: nil, _meta: nil)], isError: true)
+        guard let parts = DataPaths.splitCompoundId(id) else {
+            return .init(content: [.text(text: "Invalid analysis_id. Expected 'project/source'.", annotations: nil, _meta: nil)], isError: true)
         }
-
-        let scenes = try repo.getScenes(analysisId: analysisId)
+        guard let analysis = try store.getRecord(project: parts.project, source: parts.source) else {
+            return .init(content: [.text(text: "Analysis not found: \(id)", annotations: nil, _meta: nil)], isError: true)
+        }
+        let scenes = try store.getScenes(project: parts.project, source: parts.source)
 
         let scenesJson: [[String: Any]] = scenes.map { scene in
             var dict: [String: Any] = [
@@ -242,19 +236,15 @@ package enum AnalyzeTool {
                 "end_time": scene.endTime,
                 "description": scene.description
             ]
-            if let tags = scene.tags,
-               let data = tags.data(using: .utf8),
-               let parsed = try? JSONSerialization.jsonObject(with: data) as? [String] {
-                dict["tags"] = parsed
-            }
-            if let sceneType = scene.sceneType {
-                dict["scene_type"] = sceneType
-            }
+            if let tags = scene.tags { dict["tags"] = tags }
+            if let sceneType = scene.sceneType { dict["scene_type"] = sceneType }
             return dict
         }
 
         let response: [String: Any] = [
-            "analysis_id": analysis.id!,
+            "analysis_id": id,
+            "project": parts.project,
+            "source": parts.source,
             "source_path": analysis.sourcePath,
             "status": analysis.status,
             "sample_fps": analysis.sampleFps,
@@ -264,10 +254,7 @@ package enum AnalyzeTool {
             "frames_dir": analysis.framesDir,
             "scenes": scenesJson
         ]
-
-        let jsonData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
-        let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
-
-        return .init(content: [.text(text: jsonString, annotations: nil, _meta: nil)], isError: false)
+        let data = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
+        return .init(content: [.text(text: String(data: data, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
     }
 }

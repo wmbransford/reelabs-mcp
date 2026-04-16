@@ -18,9 +18,10 @@ package enum ProbeTool {
     )
 
     package static func handle(arguments: [String: Value]?) async -> CallTool.Result {
-        guard let path = arguments?["path"]?.stringValue else {
+        guard let rawPath = arguments?["path"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: path", annotations: nil, _meta: nil)], isError: true)
         }
+        let path = resolvePath(rawPath)
 
         do {
             let result = try await VideoProbe.probe(path: path)

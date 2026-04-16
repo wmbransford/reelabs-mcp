@@ -22,7 +22,7 @@ package enum GraphicTool {
                 ]),
                 "output_path": .object([
                     "type": .string("string"),
-                    "description": .string("Absolute path for the output PNG. Defaults to ./Generated Graphics/{uuid}.png")
+                    "description": .string("Absolute path for the output PNG. Defaults to ./Media/Graphics/{uuid}.png")
                 ]),
                 "timeout": .object([
                     "type": .string("number"),
@@ -57,7 +57,7 @@ package enum GraphicTool {
         if let provided = arguments?["output_path"]?.stringValue {
             outputPath = provided
         } else {
-            let dir = FileManager.default.currentDirectoryPath + "/Generated Graphics"
+            let dir = FileManager.default.currentDirectoryPath + "/Media/Graphics"
             try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
             let uuid8 = String(UUID().uuidString.prefix(8))
             outputPath = dir + "/\(uuid8).png"

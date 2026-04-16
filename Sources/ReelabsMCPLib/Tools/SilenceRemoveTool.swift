@@ -4,13 +4,13 @@ import MCP
 package enum SilenceRemoveTool {
     package static let tool = Tool(
         name: "reelabs_silence_remove",
-        description: "Analyze a transcript and return segments that skip silent gaps. Returns ready-to-use RenderSpec segments with padding. Use as a shortcut for silence removal — or build segments manually for more nuanced edits.",
+        description: "Analyze a transcript and return segments that skip silent gaps. Returns ready-to-use RenderSpec segments with padding. transcript_id is a compound 'project/source' string.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
                 "transcript_id": .object([
-                    "type": .string("integer"),
-                    "description": .string("Transcript to process (from reelabs_transcribe)")
+                    "type": .string("string"),
+                    "description": .string("Compound 'project/source' ID (from reelabs_transcribe)")
                 ]),
                 "gap_threshold": .object([
                     "type": .string("number"),
@@ -25,27 +25,24 @@ package enum SilenceRemoveTool {
         ])
     )
 
-    package static func handle(arguments: [String: Value]?, transcriptRepo: TranscriptRepository) -> CallTool.Result {
-        guard let transcriptId = extractInt64(arguments?["transcript_id"]) else {
+    package static func handle(arguments: [String: Value]?, store: TranscriptStore) -> CallTool.Result {
+        guard let id = arguments?["transcript_id"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: transcript_id", annotations: nil, _meta: nil)], isError: true)
+        }
+        guard let parts = DataPaths.splitCompoundId(id) else {
+            return .init(content: [.text(text: "Invalid transcript_id. Expected 'project/source' format.", annotations: nil, _meta: nil)], isError: true)
         }
 
         let gapThreshold = extractDouble(arguments?["gap_threshold"]) ?? 0.4
         let padding = extractDouble(arguments?["padding"]) ?? 0.15
 
         do {
-            guard let transcript = try transcriptRepo.get(id: transcriptId) else {
-                return .init(content: [.text(text: "Transcript not found: \(transcriptId)", annotations: nil, _meta: nil)], isError: true)
+            guard let record = try store.getRecord(project: parts.project, source: parts.source) else {
+                return .init(content: [.text(text: "Transcript not found: \(id)", annotations: nil, _meta: nil)], isError: true)
             }
+            let compactArray = try store.getCompactEntries(project: parts.project, source: parts.source)
+            let duration = record.durationSeconds
 
-            guard let jsonData = transcript.compactJson.data(using: .utf8),
-                  let compactArray = try JSONSerialization.jsonObject(with: jsonData) as? [[String: Any]] else {
-                return .init(content: [.text(text: "Failed to parse transcript compact JSON", annotations: nil, _meta: nil)], isError: true)
-            }
-
-            let duration = transcript.durationSeconds ?? Double.greatestFiniteMagnitude
-
-            // Collect utterances and count removed gaps
             var utterances: [(start: Double, end: Double)] = []
             var gapsRemoved = 0
             var timeSaved: Double = 0
@@ -61,9 +58,7 @@ package enum SilenceRemoveTool {
                 }
             }
 
-            // Build padded segments and merge overlapping ones
             var segments: [[String: Any]] = []
-
             for utt in utterances {
                 let segStart = max(0, utt.start - padding)
                 let segEnd = min(duration, utt.end + padding)
@@ -71,7 +66,6 @@ package enum SilenceRemoveTool {
                 if let last = segments.last,
                    let lastEnd = last["end"] as? Double,
                    segStart <= lastEnd {
-                    // Merge with previous segment
                     segments[segments.count - 1]["end"] = segEnd
                 } else {
                     segments.append([
@@ -82,20 +76,18 @@ package enum SilenceRemoveTool {
                 }
             }
 
-            let originalDuration = transcript.durationSeconds ?? 0
             let response: [String: Any] = [
-                "source_path": transcript.sourcePath,
-                "transcript_id": transcriptId,
+                "source_path": record.sourcePath,
+                "transcript_id": id,
                 "gap_threshold": gapThreshold,
                 "gaps_removed": gapsRemoved,
                 "time_saved_seconds": round2(timeSaved),
-                "original_duration_seconds": round2(originalDuration),
+                "original_duration_seconds": round2(duration),
                 "segments": segments
             ]
 
             let responseData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
-            let text = String(data: responseData, encoding: .utf8) ?? "{}"
-            return .init(content: [.text(text: text, annotations: nil, _meta: nil)], isError: false)
+            return .init(content: [.text(text: String(data: responseData, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
         } catch {
             return .init(content: [.text(text: "Silence removal failed: \(error.localizedDescription)", annotations: nil, _meta: nil)], isError: true)
         }

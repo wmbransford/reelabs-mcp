@@ -38,10 +38,10 @@ final class CompositionBuilder: Sendable {
         let videoTracks = [videoTrackA, videoTrackB]
         let audioTracks = [audioTrackA, audioTrackB]
 
-        // Preload source assets (deduplicated)
+        // Preload source assets (deduplicated), resolving Unicode path mismatches
         var sourceAssets: [String: AVURLAsset] = [:]
         for source in spec.sources {
-            sourceAssets[source.id] = AVURLAsset(url: URL(fileURLWithPath: source.path))
+            sourceAssets[source.id] = AVURLAsset(url: URL(fileURLWithPath: resolvePath(source.path)))
         }
 
         // Detect source resolution and fps from the first segment's source
@@ -259,7 +259,7 @@ final class CompositionBuilder: Sendable {
 
         // --- Background music track ---
         if let audio = spec.audio, let musicPath = audio.musicPath {
-            let musicAsset = AVURLAsset(url: URL(fileURLWithPath: musicPath))
+            let musicAsset = AVURLAsset(url: URL(fileURLWithPath: resolvePath(musicPath)))
             let musicAudioTracks = try await musicAsset.loadTracks(withMediaType: .audio)
             guard let srcMusicTrack = musicAudioTracks.first else {
                 throw CompositionError.musicTrackNotFound(musicPath)
@@ -433,9 +433,10 @@ final class CompositionBuilder: Sendable {
                     captionLog("[Builder] Text overlay: title=\(textConfig.title ?? "<none>") target=\(Int(targetRect.width))x\(Int(targetRect.height))@(\(Int(targetRect.origin.x)),\(Int(targetRect.origin.y))) time=\(round(CMTimeGetSeconds(overlayStart)*1000)/1000)..\(round(CMTimeGetSeconds(overlayEnd)*1000)/1000)")
 
                 case .image:
-                    guard let path = overlay.imagePath, !path.isEmpty else {
+                    guard let rawImgPath = overlay.imagePath, !rawImgPath.isEmpty else {
                         throw CompositionError.imageOverlayPathMissing
                     }
+                    let path = resolvePath(rawImgPath)
                     guard let nsImage = NSImage(contentsOfFile: path) else {
                         throw CompositionError.imageOverlayLoadFailed(path)
                     }

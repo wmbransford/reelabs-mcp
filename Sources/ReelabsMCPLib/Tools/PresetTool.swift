@@ -35,7 +35,7 @@ package enum PresetTool {
         ])
     )
 
-    package static func handle(arguments: [String: Value]?, presetRepo: PresetRepository) -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, store: PresetStore) -> CallTool.Result {
         guard let action = arguments?["action"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: action", annotations: nil, _meta: nil)], isError: true)
         }
@@ -51,28 +51,28 @@ package enum PresetTool {
                 let configData = try JSONSerialization.data(withJSONObject: config.toJSONObject(), options: [.sortedKeys])
                 let configJson = String(data: configData, encoding: .utf8) ?? "{}"
                 let desc = arguments?["description"]?.stringValue
-                let preset = try presetRepo.save(name: name, type: type, configJson: configJson, description: desc)
+                let preset = try store.save(name: name, type: type, configJson: configJson, description: desc)
                 return .init(content: [.text(text: encode(preset), annotations: nil, _meta: nil)], isError: false)
 
             case "get":
                 guard let name = arguments?["name"]?.stringValue else {
                     return .init(content: [.text(text: "Missing required argument: name", annotations: nil, _meta: nil)], isError: true)
                 }
-                if let preset = try presetRepo.get(name: name) {
+                if let preset = try store.get(name: name) {
                     return .init(content: [.text(text: encode(preset), annotations: nil, _meta: nil)], isError: false)
                 }
                 return .init(content: [.text(text: "Preset not found: \(name)", annotations: nil, _meta: nil)], isError: true)
 
             case "list":
                 let type = arguments?["type"]?.stringValue
-                let presets = try presetRepo.list(type: type)
+                let presets = try store.list(type: type)
                 return .init(content: [.text(text: encode(presets), annotations: nil, _meta: nil)], isError: false)
 
             case "delete":
                 guard let name = arguments?["name"]?.stringValue else {
                     return .init(content: [.text(text: "Missing required argument: name", annotations: nil, _meta: nil)], isError: true)
                 }
-                let deleted = try presetRepo.delete(name: name)
+                let deleted = try store.delete(name: name)
                 return .init(content: [.text(text: deleted ? "Preset '\(name)' deleted" : "Preset not found: \(name)", annotations: nil, _meta: nil)], isError: !deleted)
 
             default:

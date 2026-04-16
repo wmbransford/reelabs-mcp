@@ -12,11 +12,15 @@ enum FrameExtractor {
 
     static func extractFrames(videoPath: String, sampleFps: Double, outputDir: URL) async throws -> [ExtractedFrame] {
         let asset = AVURLAsset(url: URL(fileURLWithPath: videoPath))
-        let duration = try await asset.load(.duration)
+        let (duration, tracks) = try await asset.load(.duration, .tracks)
         let durationSeconds = CMTimeGetSeconds(duration)
 
+        guard tracks.contains(where: { $0.mediaType == .video }) else {
+            throw FrameExtractorError.noVideoTrack
+        }
+
         let generator = AVAssetImageGenerator(asset: asset)
-        generator.maximumSize = CGSize(width: 720, height: 720)
+        // No maximumSize — extract at source resolution
         generator.appliesPreferredTrackTransform = true
         generator.requestedTimeToleranceBefore = CMTime(seconds: 0.1, preferredTimescale: 600)
         generator.requestedTimeToleranceAfter = CMTime(seconds: 0.1, preferredTimescale: 600)
@@ -35,7 +39,12 @@ enum FrameExtractor {
 
         for await result in generator.images(for: times) {
             let timeSeconds = CMTimeGetSeconds(result.requestedTime)
-            let cgImage = try result.image
+            let cgImage: CGImage
+            do {
+                cgImage = try result.image
+            } catch {
+                continue // skip undecodable frames
+            }
             let index = frames.count
             let filename = String(format: "frame_%04d.jpg", index)
             let filePath = outputDir.appendingPathComponent(filename)
@@ -66,11 +75,13 @@ enum FrameExtractor {
     enum FrameExtractorError: Error, LocalizedError {
         case cannotCreateDestination
         case cannotFinalize
+        case noVideoTrack
 
         var errorDescription: String? {
             switch self {
             case .cannotCreateDestination: return "Failed to create JPEG image destination"
             case .cannotFinalize: return "Failed to finalize JPEG image"
+            case .noVideoTrack: return "No video track found in file"
             }
         }
     }

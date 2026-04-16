@@ -2,9 +2,9 @@
 import Foundation
 
 enum AudioExtractor {
-    /// Extract audio from a video file as 16kHz mono FLAC for STT.
-    /// Returns a single FLAC file URL. Caller is responsible for cleanup.
-    static func extractAudio(from videoURL: URL) async throws -> URL {
+    /// Export the audio track from a video file as an M4A (AAC passthrough from source).
+    /// Caller provides the output URL; file is overwritten if it exists.
+    static func exportM4A(from videoURL: URL, to outputURL: URL) async throws {
         let asset = AVURLAsset(url: videoURL)
 
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
@@ -12,15 +12,8 @@ enum AudioExtractor {
             throw AudioExtractorError.noAudioTrack
         }
 
-        let duration = try await asset.load(.duration)
-        return try await extractSegment(asset: asset, start: .zero, duration: duration)
-    }
-
-    /// Extract a time-ranged segment of audio to 16kHz mono FLAC.
-    private static func extractSegment(asset: AVURLAsset, start: CMTime, duration: CMTime) async throws -> URL {
-        let m4aURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("m4a")
+        // AVAssetExportSession refuses to overwrite an existing file.
+        try? FileManager.default.removeItem(at: outputURL)
 
         guard let session = AVAssetExportSession(
             asset: asset,
@@ -29,11 +22,12 @@ enum AudioExtractor {
             throw AudioExtractorError.exportSessionFailed
         }
 
-        session.timeRange = CMTimeRange(start: start, duration: duration)
+        let duration = try await asset.load(.duration)
+        session.timeRange = CMTimeRange(start: .zero, duration: duration)
 
         nonisolated(unsafe) let unsafeSession = session
         let exportTask = Task {
-            try await unsafeSession.export(to: m4aURL, as: .m4a)
+            try await unsafeSession.export(to: outputURL, as: .m4a)
         }
         let timeoutTask = Task {
             try await Task.sleep(for: .seconds(180))
@@ -49,7 +43,15 @@ enum AudioExtractor {
             }
             throw error
         }
+    }
 
+    /// Extract audio from a video file as 16kHz mono FLAC for STT.
+    /// Returns a single FLAC file URL. Caller is responsible for cleanup.
+    static func extractAudio(from videoURL: URL) async throws -> URL {
+        let m4aURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("m4a")
+        try await exportM4A(from: videoURL, to: m4aURL)
         defer { try? FileManager.default.removeItem(at: m4aURL) }
 
         // Convert M4A → 16kHz mono FLAC

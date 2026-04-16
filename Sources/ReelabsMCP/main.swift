@@ -1,7 +1,6 @@
 import Foundation
 import Logging
 import MCP
-import GRDB
 import ReelabsMCPLib
 
 // --- PID file: kill any stale server before starting ---
@@ -18,7 +17,7 @@ if let oldPidString = try? String(contentsOf: pidFile, encoding: .utf8).trimming
    let oldPid = Int32(oldPidString),
    oldPid != ProcessInfo.processInfo.processIdentifier {
     kill(oldPid, SIGTERM)
-    usleep(100_000) // 100ms for graceful shutdown
+    usleep(100_000)
 }
 try "\(ProcessInfo.processInfo.processIdentifier)".write(to: pidFile, atomically: true, encoding: .utf8)
 
@@ -26,26 +25,28 @@ try "\(ProcessInfo.processInfo.processIdentifier)".write(to: pidFile, atomically
 let loadResult = ServerConfig.load()
 let config = loadResult.config
 
-// Initialize database
-let db = try DatabaseManager(path: config.databasePath)
+// Initialize markdown data store
+let dataRoot = config.resolveDataRoot()
+try FileManager.default.createDirectory(at: dataRoot, withIntermediateDirectories: true)
+let paths = DataPaths(root: dataRoot)
 
-// Create repositories
-let projectRepo = ProjectRepository(dbPool: db.dbPool)
-let assetRepo = AssetRepository(dbPool: db.dbPool)
-let transcriptRepo = TranscriptRepository(dbPool: db.dbPool)
-let renderRepo = RenderRepository(dbPool: db.dbPool)
-let presetRepo = PresetRepository(dbPool: db.dbPool)
-let analysisRepo = VisualAnalysisRepository(dbPool: db.dbPool)
+let projectStore = ProjectStore(paths: paths)
+let assetStore = AssetStore(paths: paths)
+let transcriptStore = TranscriptStore(paths: paths)
+let renderStore = RenderStore(paths: paths)
+let presetStore = PresetStore(paths: paths)
+let analysisStore = AnalysisStore(paths: paths)
 
 // Seed default presets on first run
-try DefaultPresets.seed(repo: presetRepo)
+try DefaultPresets.seed(store: presetStore)
 
 // MARK: - Startup Validation
 
 do {
     let startupLogger = Logger(label: "reelabs.startup")
-    startupLogger.info("ReeLabs MCP v2.0.0")
+    startupLogger.info("ReeLabs MCP v2.0.0 — markdown data store")
     startupLogger.info("Config: \(loadResult.configSource)")
+    startupLogger.info("Data root: \(dataRoot.path)")
 
     if let saPath = config.serviceAccountPath {
         let readable = FileManager.default.isReadableFile(atPath: saPath)
@@ -53,27 +54,18 @@ do {
     } else {
         startupLogger.warning("Service account: not configured (transcription disabled)")
     }
-
-    let dbPath: String
-    if let configDbPath = config.databasePath {
-        dbPath = configDbPath
-    } else {
-        dbPath = (try? DatabaseManager.databaseURL().path) ?? "<unknown>"
-    }
-    startupLogger.info("Database: \(dbPath)")
 }
 
 // MARK: - Server Configuration
 
-/// Registers all tools on a Server instance.
 func configureServer(_ server: Server) async {
     await server.withMethodHandler(ListTools.self) { _ in
         .init(tools: [
             ProbeTool.tool,
             TranscribeTool.tool,
+            TranscriptTool.tool,
             RenderTool.tool,
             ValidateTool.tool,
-            SearchTool.tool,
             ProjectTool.tool,
             AssetTool.tool,
             PresetTool.tool,
@@ -82,6 +74,7 @@ func configureServer(_ server: Server) async {
             RerenderTool.tool,
             GraphicTool.tool,
             LayoutTool.tool,
+            ExtractAudioTool.tool,
         ])
     }
 
@@ -91,40 +84,68 @@ func configureServer(_ server: Server) async {
             return await ProbeTool.handle(arguments: params.arguments)
 
         case "reelabs_transcribe":
-            return await TranscribeTool.handle(arguments: params.arguments, transcriptRepo: transcriptRepo, config: config)
+            return await TranscribeTool.handle(
+                arguments: params.arguments,
+                transcriptStore: transcriptStore,
+                projectStore: projectStore,
+                config: config
+            )
+
+        case "reelabs_transcript":
+            return TranscriptTool.handle(arguments: params.arguments, store: transcriptStore)
 
         case "reelabs_render":
-            return await RenderTool.handle(arguments: params.arguments, renderRepo: renderRepo, transcriptRepo: transcriptRepo, presetRepo: presetRepo)
+            return await RenderTool.handle(
+                arguments: params.arguments,
+                renderStore: renderStore,
+                transcriptStore: transcriptStore,
+                projectStore: projectStore,
+                presetStore: presetStore
+            )
 
         case "reelabs_validate":
-            return await ValidateTool.handle(arguments: params.arguments, transcriptRepo: transcriptRepo)
-
-        case "reelabs_search":
-            return SearchTool.handle(arguments: params.arguments, dbPool: db.dbPool)
+            return await ValidateTool.handle(arguments: params.arguments, transcriptStore: transcriptStore)
 
         case "reelabs_project":
-            return ProjectTool.handle(arguments: params.arguments, repo: projectRepo)
+            return ProjectTool.handle(arguments: params.arguments, store: projectStore)
 
         case "reelabs_asset":
-            return await AssetTool.handle(arguments: params.arguments, assetRepo: assetRepo)
+            return await AssetTool.handle(
+                arguments: params.arguments,
+                assetStore: assetStore,
+                projectStore: projectStore
+            )
 
         case "reelabs_preset":
-            return PresetTool.handle(arguments: params.arguments, presetRepo: presetRepo)
+            return PresetTool.handle(arguments: params.arguments, store: presetStore)
 
         case "reelabs_silence_remove":
-            return SilenceRemoveTool.handle(arguments: params.arguments, transcriptRepo: transcriptRepo)
+            return SilenceRemoveTool.handle(arguments: params.arguments, store: transcriptStore)
 
         case "reelabs_analyze":
-            return await AnalyzeTool.handle(arguments: params.arguments, analysisRepo: analysisRepo)
+            return await AnalyzeTool.handle(
+                arguments: params.arguments,
+                analysisStore: analysisStore,
+                projectStore: projectStore
+            )
 
         case "reelabs_rerender":
-            return await RerenderTool.handle(arguments: params.arguments, renderRepo: renderRepo, transcriptRepo: transcriptRepo, presetRepo: presetRepo)
+            return await RerenderTool.handle(
+                arguments: params.arguments,
+                renderStore: renderStore,
+                transcriptStore: transcriptStore,
+                projectStore: projectStore,
+                presetStore: presetStore
+            )
 
         case "reelabs_graphic":
             return await GraphicTool.handle(arguments: params.arguments)
 
         case "reelabs_layout":
             return LayoutTool.handle(arguments: params.arguments)
+
+        case "reelabs_extract_audio":
+            return await ExtractAudioTool.handle(arguments: params.arguments)
 
         default:
             return .init(

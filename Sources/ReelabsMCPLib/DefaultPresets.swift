@@ -1,10 +1,9 @@
 import Foundation
 
 package enum DefaultPresets {
-    package static func seed(repo: PresetRepository) throws {
+    package static func seed(store: PresetStore) throws {
         // Always upsert defaults to keep presets current
 
-        // Caption presets
         let tiktok: [String: Any] = [
             "fontFamily": "Arial",
             "fontSize": 7.0,
@@ -79,7 +78,7 @@ package enum DefaultPresets {
         for (name, type, config, desc) in presets {
             let data = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
             let json = String(data: data, encoding: .utf8) ?? "{}"
-            _ = try repo.save(name: name, type: type, configJson: json, description: desc)
+            _ = try store.save(name: name, type: type, configJson: json, description: desc)
         }
     }
 }

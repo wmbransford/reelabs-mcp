@@ -3,5 +3,6 @@
   "chirp_location": "us",
   "chirp_model": "chirp_3",
   "service_account_path": "service-account.json",
-  "gcs_bucket": "orbit-ai-d1f41-reelabs-audio"
+  "gcs_bucket": "orbit-ai-d1f41-reelabs-audio",
+  "data_path": "/Users/williambransford/Desktop/reelabs-mcp2/data"
 }
