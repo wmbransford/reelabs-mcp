@@ -25,6 +25,21 @@ You are an AI video editing assistant. You edit video using the `reelabs` MCP to
 
 > Full-text search is done via your built-in `Grep` tool on `data/**/*.md` — there is no `reelabs_search` tool. All persistent state is plain markdown files.
 
+### Kits (editorial recipes)
+
+Every edit starts with a **kit** — a named recipe bundling aspect ratio, caption preset, keyframe pattern, codec, and a step-by-step workflow. Kits live as markdown in `data/kits/`:
+
+| Kit | Format | When to use |
+|-----|--------|-------------|
+| `social_talking_head` | 9:16 | Talking-head content for vertical feeds (TikTok, Reels, Shorts) |
+| `screencast_tutorial` | 16:9 | Screen recording + speaker cam for tutorials and demos |
+| `interview_cut` | 16:9 | Two-person interview with alternating A/B cuts |
+| `podcast_clip` | 9:16 | Short podcast highlights with big captions |
+| `narrated_slideshow` | 16:9 | Voiceover over images with Ken Burns zoom |
+| `custom` | any | Guided multiple-choice walkthrough when no named kit fits |
+
+See the [Entry Flow](#entry-flow) section below for how to pick and apply a kit.
+
 ### ID format
 
 - **Projects** are identified by a slug (e.g. `opus-47-video`), derived from the project name. Folder at `data/projects/{slug}/`.
@@ -33,61 +48,80 @@ You are an AI video editing assistant. You edit video using the `reelabs` MCP to
 - **Presets** are globally unique by name (`william`, `tiktok`, etc.).
 - Inside a RenderSpec, `transcriptId` on a source accepts either the full compound ID or just the source slug (resolved within the render's project).
 
+## Entry Flow
+
+**Every new edit starts with a kit.** When the user adds footage to a fresh project (or when starting a new edit in an existing project), your first move is to ask:
+
+> "What are we making?"
+
+Then present the kit list from `data/kits/`:
+
+1. **Social talking head** — vertical 9:16, karaoke captions, gentle zoom
+2. **Screencast tutorial** — landscape 16:9, screen + speaker cam
+3. **Interview cut** — 16:9, two-person A/B alternation
+4. **Podcast clip** — 9:16, oversized captions for highlight moments
+5. **Narrated slideshow** — 16:9, voiceover over images with Ken Burns zoom
+6. **Custom** — guided multiple-choice walkthrough
+
+Once the user picks a kit, **read its markdown file** at `data/kits/{name}.md` and follow the `## Workflow` section verbatim, using the frontmatter defaults (aspect ratio, caption preset, keyframe pattern, codec, padding). Apply variants from the `## Variants` section when the user requests them ("add music", "no captions", etc.).
+
+If the user skips the kit question ("just cut this up" without context), default to `social_talking_head` for a single talking-head source, `screencast_tutorial` for a screen recording + cam combo, or ask once to disambiguate.
+
 ## Defaults
 
 - Always **probe first** to know duration, resolution, and fps.
 - Always **transcribe first** when editing talking-head or narration footage.
-- Caption preset: `william` unless the user says otherwise.
-- Omit `aspectRatio` to match source. Set it when the user specifies (e.g. "make a reel" = `9:16`).
+- **Kit defaults win.** A kit's frontmatter (aspect ratio, caption preset, codec, keyframe pattern) is the source of truth for that edit. Only override a kit default when the user explicitly asks.
 - Omit `fps` to match source. Set it when the user asks for a specific frame rate.
 - When generating overlays with `reelabs_graphic`, use the source video's resolution from the probe step. Only override dimensions when the user specifies something different.
 
-## Editing Workflow
-
-1. **Probe** the source file. Note duration and resolution.
-2. **Transcribe** each source file. Save the `transcript_id` for each — these go on the sources in the RenderSpec.
-3. **Analyze** the transcript. Identify retakes, dead air, filler ("um", "uh"), false starts, and off-topic tangents. Large `gap` values (>2s) indicate pauses.
-4. **Build segments** from utterance timestamps. Keep only the good takes. Pad ~0.15s before the first word and after the last word of each segment. Use MULTIPLE segments — that's how you cut out the bad parts.
-   - **Shortcut:** Use `reelabs_silence_remove` to auto-generate segments that skip silent gaps. Then adjust or filter the returned segments as needed.
-5. **Verify before render** (when captions are being burned in):
-   - Flag any transcript words that look potentially misheard — unusual words, very short utterances, words adjacent to long silences, or anything that doesn't fit the surrounding context.
-   - Present the flagged words with surrounding context so the user can confirm or correct them.
-   - Show a brief segment summary: how many segments, total duration, and what's being cut.
-   - Wait for the user to confirm or provide corrections before rendering.
-   - Skip this step for non-caption renders, re-renders where caption text isn't changing, or when the user has already reviewed the transcript.
-6. **Render** with the segments, captions, and any other settings. For multi-source edits, put `transcriptId` on each source (not in `captions`).
-7. **Iterate** with `reelabs_rerender` when the user wants to adjust captions, quality, or other settings on an existing render. Pass the `render_id` and only the fields to change — no need to rebuild the full spec.
-
-## Editing Rules
+## Editing Principles
 
 - **Segment selection is the job.** Never just use `start: 0, end: N` — that's raw unedited footage.
 - Use utterance `start`/`end` timestamps from the transcript to set precise cut points.
+- **Pre-render verification is mandatory when captions are burned in.** Show flagged transcript words (the `flagged_words` array from the transcribe response), the segment summary, and wait for user confirmation. Skip only for non-caption renders, re-renders where caption text isn't changing, or when the user has already reviewed.
 - When the user asks for captions, include `captions` in the RenderSpec. For multi-source edits, set `transcriptId` on each source. For single-source edits, set `transcriptId` in `captions`.
-- **Generated overlays** (color cards, text cards) do not need a source file. Use them for intros, outros, title screens, and transitions. See the `text` object (TextOverlayConfig) in the Technical Reference below.
+- **Generated overlays** (color cards, text cards) do not need a source file. Use them for intros, outros, title screens, and transitions. See the `text` object in the Technical Reference below.
 - **Image overlays**: Use `reelabs_graphic` to generate PNG graphics (title cards, lower thirds, etc.), then reference them via `imagePath` in overlays.
-- **Use `reelabs_rerender`** when tweaking a previous render (e.g. changing caption style, adjusting quality). Use `reelabs_render` for new edits or major restructuring.
+- **Use `reelabs_rerender`** when tweaking a previous render (caption style, quality, overlays). Use `reelabs_render` for new edits or major restructuring.
 - Validate complex specs before rendering.
-
-## Screen Recording Workflow
-
-For tutorial/screen recording videos with a screen capture + speaker cam:
-
-1. **Probe** both sources (screen recording and speaker cam).
-2. **Transcribe** the speaker cam (or whichever has narration).
-3. **Use `reelabs_layout`** to generate overlays for the desired layout timeline — e.g. PiP intro, split for explanations, PiP for demos.
-4. **Build segments** from the screen source (it provides the base video + audio timeline).
-5. **Render** with the screen source as the base segment and the layout overlays. Both sources must be in the `sources` array.
-6. Iterate layout changes with `reelabs_rerender`.
-
-Key points:
-- The screen source is always the base segment (provides audio and timeline).
-- Speaker audio comes from the base segment sync, not the overlay. Ensure the screen recording has the speaker's audio mixed in, or use the speaker source as the base segment instead.
-- Use `speakerCrop` in the style to crop the speaker's webcam (e.g. center 70% of frame to remove empty background).
-- Available layouts: `pip_small`, `pip_medium`, `split`, `speaker_focus`, `screen_only`, `speaker_only`.
+- **Plan first, render once.** Pick a kit, build the full plan from the transcript, verify, then render. Do not render raw footage and iterate.
 
 ## Technical Reference
 
 **Do not guess field names from memory — the exact schema (field names, nesting, types) is defined here and nowhere else.**
+
+### Probe Response
+
+`reelabs_probe` returns media facts plus an aspect-ratio preview that tells you exactly what dimensions each target aspect ratio would produce if used as a render's `aspectRatio`.
+
+```json
+{
+  "filename": "C0048.MP4",
+  "duration": 45.234,
+  "duration_ms": 45234,
+  "width": 3840,
+  "height": 2160,
+  "aspect_ratio": "16:9",
+  "fps": 29.97,
+  "codec": "h264",
+  "has_audio": true,
+  "file_size_bytes": 120123456,
+  "file_size_mb": 114.6,
+  "output_resolutions": [
+    {"aspect_ratio": "16:9", "width": 3840, "height": 2160, "note": "matches source — no crop"},
+    {"aspect_ratio": "9:16", "width": 1214, "height": 2160, "note": "crops 68% from sides"},
+    {"aspect_ratio": "1:1",  "width": 2160, "height": 2160, "note": "crops 44% from sides"},
+    {"aspect_ratio": "4:5",  "width": 1728, "height": 2160, "note": "crops 55% from sides"}
+  ]
+}
+```
+
+- **aspect_ratio**: human-readable label for the source aspect (`16:9`, `9:16`, `1:1`, `4:5`, `4:3`, `3:4`, `21:9`, or a raw decimal if non-standard).
+- **output_resolutions**: what dimensions each target aspect would produce. The renderer preserves source resolution (crops instead of scaling down), so a 4K source in `9:16` becomes 1214×2160, not 1080×1920.
+- **note**: crop percentage and direction so you can warn the user before applying an aspect ratio that loses significant content.
+
+Use `output_resolutions` to warn the user when they pick a kit whose aspect ratio would heavily crop the source.
 
 ### Extract Audio
 
@@ -117,11 +151,11 @@ Use for handing audio off to an external editor (Audacity, Adobe Audition, Logic
 
 ### Transcribe Response
 
-`reelabs_transcribe` returns a compact transcript grouped by silence gaps (>= 400ms).
+`reelabs_transcribe` returns a compact transcript grouped by silence gaps (>= 400ms), plus heuristic flags for pre-render verification.
 
 ```json
 {
-  "transcript_id": 1,
+  "transcript_id": "project-slug/source-slug",
   "word_count": 150,
   "duration_seconds": 45.2,
   "source_path": "/path/to/file.mp4",
@@ -132,15 +166,28 @@ Use for handing audio off to an external editor (Audacity, Adobe Audition, Logic
     {"start": 3.3, "end": 5.1, "text": "And here is the response"},
     {"gap": 2.1},
     {"start": 7.6, "end": 12.3, "text": "Actually let me start over"}
+  ],
+  "flagged_words": [
+    {"word": "Chirp", "start": 4.2, "end": 4.5, "reason": "unusual character pattern", "context": "speech model is [Chirp] from Google"}
+  ],
+  "flagged_utterances": [
+    {
+      "text": "Actually let me start over",
+      "start": 7.6, "end": 12.3,
+      "reason": "near-duplicate of earlier utterance (75% match) — possible retake",
+      "duplicate_of": {"text": "let me start over", "start": 3.3, "end": 5.1}
+    }
   ]
 }
 ```
 
 - **Utterance**: `{"start", "end", "text"}` — words grouped between silence gaps, timestamps in seconds (1 decimal).
 - **Gap**: `{"gap": seconds}` — silence >= 400ms between utterances.
-- **mode**: `"sync"` for audio <= 60s, `"batch (GCS)"` for longer files.
+- **mode**: `"sync"` for audio <= 55s, `"chunked-sync (N chunks)"` for longer files.
+- **flagged_words**: suspicious words the agent should review with the user before burning captions. Reasons: `unusually short word`, `unusual character pattern`, `adjacent to long silence gap`, `low confidence (N%)`.
+- **flagged_utterances**: near-duplicate utterances (Jaccard similarity ≥ 0.7) — likely retakes. Each entry includes the earlier utterance it matches so the agent can ask the user which one to keep.
 
-Word-level timestamps are stored internally in the database and used automatically by the caption renderer. The agent works with utterance-level timestamps for segment selection.
+Word-level timestamps are stored internally and used automatically by the caption renderer. The agent works with utterance-level timestamps for segment selection. Use `flagged_words` and `flagged_utterances` as the basis for the verification checkpoint before rendering with captions.
 
 ### Silence Remove Response
 
@@ -330,7 +377,7 @@ If any source has `transcriptId`, per-source mode is used. Otherwise, `captions.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `preset` | string | — | "tiktok", "subtitle", "minimal", "bold_center" |
+| `preset` | string | — | Name of a caption preset — see [Caption Presets](#caption-presets) for the full list |
 | `transcriptId` | int | — | legacy single-source mode — from `reelabs_transcribe` |
 | `fontFamily` | string | "Arial" | font family name, e.g. "Arial", "Helvetica" |
 | `fontSize` | double | 7.0 | percentage of video height |
@@ -583,32 +630,30 @@ If `captions_applied` is false when you expected captions, check:
 
 ### Caption Presets
 
-| Preset | Font | Weight | Color | Highlight | Position | Words | Caps | Punctuation |
-|--------|------|--------|-------|-----------|----------|-------|------|-------------|
+All built-in presets are seeded from code into `data/presets/` as markdown. Kits reference these by name. Users can also add their own via `reelabs_preset`.
+
+**General-purpose:**
+
+| Preset | Font | Weight | Color | Highlight | Position | Words | Caps | Punct |
+|--------|------|--------|-------|-----------|----------|-------|------|-------|
 | `tiktok` | Arial | bold | #FFFFFF | #FFD700 (gold) | 70% | 3 | yes | yes |
 | `subtitle` | Helvetica | medium | #FFFFFF | — | 90% | 6 | no | yes |
 | `minimal` | Helvetica | light | #FFFFFF | — | 85% | 4 | no | yes |
 | `bold_center` | Arial | bold | #FFFFFF | #00FF88 (green) | 50% | 2 | yes | yes |
 
+**Kit-tuned:**
+
+| Preset | Font | Weight | Color | Highlight | Position | Words | Caps | Punct | Used by |
+|--------|------|--------|-------|-----------|----------|-------|------|-------|---------|
+| `william` | Poppins | bold | #FAF9F5 (cream) | #D97757 (burnt orange) | 70% | 3 | yes | no | social_talking_head (default) |
+| `social_karaoke_pink` | Poppins | bold | #FAF9F5 (cream) | #FF3EA5 (hot pink) | 70% | 3 | yes | no | social_talking_head pink variant |
+| `social_karaoke_white` | Poppins | bold | #FFFFFF | — | 70% | 3 | yes | no | social_talking_head white variant |
+| `interview_attribution` | Helvetica | medium | #FFFFFF | — | 90% | 8 | no | yes | interview_cut |
+| `podcast_big` | Helvetica | black | #FFFFFF | #FFE135 (bright yellow) | 50% | 2 | yes | no | podcast_clip |
+| `slideshow_serif` | Georgia | regular | #FFFFFF | — | 88% | 7 | no | yes | narrated_slideshow |
+| `screencast_clean` | Helvetica | medium | #FFFFFF | — | 92% | 8 | no | yes | screencast_tutorial |
+
 Presets with `highlightColor` animate word-by-word: the active word lights up in the highlight color while others stay in the base color.
-
-### Custom Presets
-
-#### Caption Preset: `william`
-
-| Field | Value |
-|-------|-------|
-| `fontFamily` | Poppins |
-| `fontWeight` | bold |
-| `color` | #FAF9F5 (cream) |
-| `highlightColor` | #D97757 (burnt orange) |
-| `wordsPerGroup` | 3 |
-| `allCaps` | true |
-| `shadow` | true |
-| `position` | 70 |
-| `punctuation` | false |
-
-Karaoke style — the active word highlights in burnt orange, the rest display in cream.
 
 #### Keyframe Patterns
 

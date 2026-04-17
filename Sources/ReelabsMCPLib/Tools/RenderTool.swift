@@ -276,7 +276,7 @@ package enum RenderTool {
                 "aspect_ratio": aspectLabel,
                 "timing": profiler.responseTiming()
             ]
-            let responseData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
+            let responseData = try safeJSONData(from: response)
             return .init(content: [.text(text: String(data: responseData, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
         } catch let decodingError as DecodingError {
             let detail: String

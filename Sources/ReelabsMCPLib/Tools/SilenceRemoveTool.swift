@@ -86,7 +86,7 @@ package enum SilenceRemoveTool {
                 "segments": segments
             ]
 
-            let responseData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
+            let responseData = try safeJSONData(from: response)
             return .init(content: [.text(text: String(data: responseData, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
         } catch {
             return .init(content: [.text(text: "Silence removal failed: \(error.localizedDescription)", annotations: nil, _meta: nil)], isError: true)

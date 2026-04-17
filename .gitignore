@@ -7,3 +7,7 @@ service-account.json
 .DS_Store
 **/.DS_Store
 Generated Graphics/
+Extracted Frames/
+.obsidian/
+data/projects/
+data/presets/

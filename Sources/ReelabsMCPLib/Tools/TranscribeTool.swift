@@ -110,6 +110,10 @@ package enum TranscribeTool {
                 words: wordEntries
             )
 
+            // Run the verification flagger over word-level timestamps so the agent can
+            // review misheard words and probable retakes before burning captions.
+            let flags = TranscriptFlagger.flag(words: wordEntries)
+
             // Return the compact transcript the agent sees
             let transcriptId = "\(projectSlug)/\(sourceSlug)"
             let response: [String: Any] = [
@@ -120,9 +124,11 @@ package enum TranscribeTool {
                 "duration_seconds": round(transcriptData.durationSeconds * 100) / 100,
                 "transcript": compactArray,
                 "source_path": path,
-                "mode": mode
+                "mode": mode,
+                "flagged_words": flags.flaggedWords,
+                "flagged_utterances": flags.flaggedUtterances
             ]
-            let responseData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
+            let responseData = try safeJSONData(from: response)
             let text = String(data: responseData, encoding: .utf8) ?? "{}"
             return .init(content: [.text(text: text, annotations: nil, _meta: nil)], isError: false)
         } catch {

@@ -163,7 +163,7 @@ package enum AnalyzeTool {
             "instructions": instructions
         ]
 
-        let jsonData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
+        let jsonData = try safeJSONData(from: response)
         return .init(content: [.text(text: String(data: jsonData, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
     }
 
@@ -213,7 +213,7 @@ package enum AnalyzeTool {
             "scenes_stored": scenes.count,
             "status": "analyzed"
         ]
-        let data = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
+        let data = try safeJSONData(from: response)
         return .init(content: [.text(text: String(data: data, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
     }
 
@@ -254,7 +254,7 @@ package enum AnalyzeTool {
             "frames_dir": analysis.framesDir,
             "scenes": scenesJson
         ]
-        let data = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
+        let data = try safeJSONData(from: response)
         return .init(content: [.text(text: String(data: data, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
     }
 }
