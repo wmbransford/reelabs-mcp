@@ -54,7 +54,7 @@ jobs:
         uses: mislav/bump-homebrew-formula-action@v3
         with:
           formula-name: reelabs-mcp
-          homebrew-tap: wmbransford/homebrew-tap
+          homebrew-tap: reelabs/homebrew-tap
           formula-path: Formula/reelabs-mcp.rb
           download-url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.package.outputs.tarball }}
           commit-message: |
