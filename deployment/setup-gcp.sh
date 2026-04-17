@@ -70,4 +70,4 @@ done
 
 echo ""
 echo "✓ GCP setup complete."
-echo "  Next: firebase deploy --only functions"
+echo "  Next: cd deployment && firebase deploy --only functions"
