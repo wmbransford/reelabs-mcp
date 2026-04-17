@@ -2,7 +2,8 @@ import Foundation
 
 /// Resolves all filesystem paths used by the markdown-backed data store.
 ///
-/// `root` points at the `data/` folder. Everything else hangs off that.
+/// `root` is the data root — either `$REELABS_DATA_DIR` (dev) or
+/// `~/Library/Application Support/ReelabsMCP/` (Homebrew install).
 /// Passed into every Store at init time so tests can use an isolated directory.
 package struct DataPaths: Sendable {
     package let root: URL
@@ -20,6 +21,10 @@ package struct DataPaths: Sendable {
 
     package var projectsDir: URL { root.appendingPathComponent("projects", isDirectory: true) }
     package var presetsDir: URL { root.appendingPathComponent("presets", isDirectory: true) }
+    package var kitsDir: URL { root.appendingPathComponent("kits", isDirectory: true) }
+    package var mediaDir: URL { root.appendingPathComponent("Media", isDirectory: true) }
+    package var framesDir: URL { mediaDir.appendingPathComponent("Frames", isDirectory: true) }
+    package var graphicsDir: URL { mediaDir.appendingPathComponent("Graphics", isDirectory: true) }
 
     // MARK: - Project-scoped paths
 

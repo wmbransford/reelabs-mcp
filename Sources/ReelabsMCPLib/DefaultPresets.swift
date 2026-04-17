@@ -6,7 +6,7 @@ package enum DefaultPresets {
 
         let tiktok: [String: Any] = [
             "fontFamily": "Arial",
-            "fontSize": 7.0,
+            "fontSize": 5.5,
             "fontWeight": "bold",
             "color": "#FFFFFF",
             "highlightColor": "#FFD700",
@@ -43,7 +43,7 @@ package enum DefaultPresets {
 
         let boldCenter: [String: Any] = [
             "fontFamily": "Arial",
-            "fontSize": 8.0,
+            "fontSize": 7.0,
             "fontWeight": "bold",
             "color": "#FFFFFF",
             "highlightColor": "#00FF88",
@@ -56,7 +56,7 @@ package enum DefaultPresets {
 
         let william: [String: Any] = [
             "fontFamily": "Poppins",
-            "fontSize": 7.0,
+            "fontSize": 5.5,
             "fontWeight": "bold",
             "color": "#FAF9F5",
             "highlightColor": "#D97757",
@@ -69,7 +69,7 @@ package enum DefaultPresets {
 
         let socialKaraokePink: [String: Any] = [
             "fontFamily": "Poppins",
-            "fontSize": 7.0,
+            "fontSize": 5.5,
             "fontWeight": "bold",
             "color": "#FAF9F5",
             "highlightColor": "#FF3EA5",
@@ -82,9 +82,10 @@ package enum DefaultPresets {
 
         let socialKaraokeWhite: [String: Any] = [
             "fontFamily": "Poppins",
-            "fontSize": 7.0,
+            "fontSize": 5.5,
             "fontWeight": "bold",
-            "color": "#FFFFFF",
+            "color": "#AAAAAA",
+            "highlightColor": "#FFFFFF",
             "position": 70.0,
             "allCaps": true,
             "shadow": true,

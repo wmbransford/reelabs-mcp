@@ -84,4 +84,4 @@ Maps to `audio`:
 
 ## Saving the answers
 
-If the user says "make this my default" or "save this as a kit," create a new kit file at `data/kits/{user-chosen-name}.md` with the assembled frontmatter. Otherwise, the custom config is one-off — don't persist it.
+If the user says "make this my default" or "save this as a kit," create a new kit file at `{dataRoot}/kits/{user-chosen-name}.md` with the assembled frontmatter. Otherwise, the custom config is one-off — don't persist it.

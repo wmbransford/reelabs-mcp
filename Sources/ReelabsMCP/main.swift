@@ -3,6 +3,29 @@ import Logging
 import MCP
 import ReelabsMCPLib
 
+// MARK: - Subcommands (sign-in, sign-out, whoami)
+
+if CommandLine.arguments.count >= 2 {
+    let sub = CommandLine.arguments[1]
+    switch sub {
+    case "sign-in":
+        await runSignIn()
+        exit(0)
+    case "sign-out":
+        await runSignOut()
+        exit(0)
+    case "whoami":
+        await runWhoAmI()
+        exit(0)
+    case "--help", "-h", "help":
+        printUsage()
+        exit(0)
+    default:
+        // Fall through — unknown flags like --port are handled below.
+        break
+    }
+}
+
 // --- PID file: kill any stale server before starting ---
 let pidDir = try FileManager.default.url(
     for: .applicationSupportDirectory,
@@ -40,6 +63,9 @@ let analysisStore = AnalysisStore(paths: paths)
 // Seed default presets on first run
 try DefaultPresets.seed(store: presetStore)
 
+// Seed bundled kits — built-ins are always upserted, user-created kits are left alone
+try DefaultKits.seed(kitsDir: paths.kitsDir)
+
 // MARK: - Startup Validation
 
 do {
@@ -48,11 +74,11 @@ do {
     startupLogger.info("Config: \(loadResult.configSource)")
     startupLogger.info("Data root: \(dataRoot.path)")
 
-    if let saPath = config.serviceAccountPath {
-        let readable = FileManager.default.isReadableFile(atPath: saPath)
-        startupLogger.info("Service account: \(saPath) (readable: \(readable))")
+    let tokenPresent = ((try? TokenKeychain.read()) ?? nil)?.isEmpty == false
+    if tokenPresent {
+        startupLogger.info("API token: present in keychain")
     } else {
-        startupLogger.warning("Service account: not configured (transcription disabled)")
+        startupLogger.warning("API token: not set (transcription disabled — run `reelabs-mcp sign-in`)")
     }
 }
 
@@ -125,6 +151,7 @@ func configureServer(_ server: Server) async {
         case "reelabs_analyze":
             return await AnalyzeTool.handle(
                 arguments: params.arguments,
+                paths: paths,
                 analysisStore: analysisStore,
                 projectStore: projectStore
             )
@@ -139,7 +166,7 @@ func configureServer(_ server: Server) async {
             )
 
         case "reelabs_graphic":
-            return await GraphicTool.handle(arguments: params.arguments)
+            return await GraphicTool.handle(arguments: params.arguments, paths: paths)
 
         case "reelabs_layout":
             return LayoutTool.handle(arguments: params.arguments)
@@ -187,3 +214,82 @@ let httpServer = HTTPServer(
 )
 
 try await httpServer.start()
+
+// MARK: - Subcommand implementations
+
+func printUsage() {
+    print("""
+    reelabs-mcp — native video editing for Claude.
+
+    Usage:
+      reelabs-mcp                 Run the MCP server (default)
+      reelabs-mcp sign-in         Connect this device to your ReeLabs account
+      reelabs-mcp sign-out        Remove the stored API token
+      reelabs-mcp whoami          Show whether the device is signed in
+      reelabs-mcp --port <n>      Run the MCP server on a custom port
+      reelabs-mcp --help          Show this message
+    """)
+}
+
+func runSignIn() async {
+    let flow = DeviceCodeFlow()
+    let start: DeviceCodeFlow.Start
+    do {
+        start = try await flow.start()
+    } catch {
+        print("Failed to start sign-in: \(error.localizedDescription)")
+        exit(1)
+    }
+
+    print("""
+
+    To connect this device, open the URL below in a browser:
+
+      \(start.verificationUriComplete)
+
+    Confirm the code: \(start.userCode)
+
+    Waiting for sign-in…
+    """)
+
+    // Best-effort: open the activation URL in the default browser.
+    let task = Process()
+    task.launchPath = "/usr/bin/open"
+    task.arguments = [start.verificationUriComplete]
+    try? task.run()
+
+    do {
+        let activated = try await flow.pollUntilActivated(start: start)
+        try TokenKeychain.write(activated.apiToken)
+        print("\n✓ Device connected. You're signed in.")
+    } catch {
+        print("\nSign-in failed: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+
+func runSignOut() async {
+    do {
+        try TokenKeychain.delete()
+        print("Signed out.")
+    } catch {
+        print("Failed to sign out: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+
+func runWhoAmI() async {
+    let token = (try? TokenKeychain.read()) ?? nil
+    if let token, !token.isEmpty {
+        print("Signed in. Token: \(maskedToken(token))")
+    } else {
+        print("Not signed in. Run `reelabs-mcp sign-in`.")
+    }
+}
+
+func maskedToken(_ token: String) -> String {
+    guard token.count > 8 else { return "••••" }
+    let prefix = token.prefix(5)
+    let suffix = token.suffix(3)
+    return "\(prefix)…\(suffix)"
+}

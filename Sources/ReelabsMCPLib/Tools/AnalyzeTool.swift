@@ -51,6 +51,7 @@ package enum AnalyzeTool {
 
     package static func handle(
         arguments: [String: Value]?,
+        paths: DataPaths,
         analysisStore: AnalysisStore,
         projectStore: ProjectStore
     ) async -> CallTool.Result {
@@ -61,7 +62,7 @@ package enum AnalyzeTool {
         do {
             switch action {
             case "extract":
-                return try await handleExtract(arguments: arguments, analysisStore: analysisStore, projectStore: projectStore)
+                return try await handleExtract(arguments: arguments, paths: paths, analysisStore: analysisStore, projectStore: projectStore)
             case "store":
                 return try handleStore(arguments: arguments, store: analysisStore)
             case "get":
@@ -76,6 +77,7 @@ package enum AnalyzeTool {
 
     private static func handleExtract(
         arguments: [String: Value]?,
+        paths: DataPaths,
         analysisStore: AnalysisStore,
         projectStore: ProjectStore
     ) async throws -> CallTool.Result {
@@ -98,9 +100,7 @@ package enum AnalyzeTool {
         let duration = try await asset.load(.duration)
         let durationSeconds = CMTimeGetSeconds(duration)
 
-        // Frames folder lives next to the data
-        let framesDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("Extracted Frames", isDirectory: true)
+        let framesDir = paths.framesDir
             .appendingPathComponent("\(projectSlug)-\(sourceSlug)", isDirectory: true)
 
         let frames = try await FrameExtractor.extractFrames(

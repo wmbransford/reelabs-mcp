@@ -1,8 +1,8 @@
 import Foundation
 
 /// Markdown + JSON sidecar storage for visual analyses.
-/// - `data/projects/{project}/{source}.analysis.md`
-/// - `data/projects/{project}/{source}.scenes.json`
+/// - `{dataRoot}/projects/{project}/{source}.analysis.md`
+/// - `{dataRoot}/projects/{project}/{source}.scenes.json`
 package struct AnalysisStore: Sendable {
     let paths: DataPaths
 

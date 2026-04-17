@@ -140,7 +140,6 @@ final class ExportService: Sendable {
         }
 
         // === CAPTION PIPELINE ===
-        var didApplyCaptions = false
         var captionSublayerCount = 0
         captionLog("[ReeLabs Caption] === CAPTION PIPELINE START ===")
         captionLog("[ReeLabs Caption] captionConfig: \(captionConfig != nil), transcriptData: \(transcriptData != nil)")
@@ -198,69 +197,6 @@ final class ExportService: Sendable {
                         captionSublayerCount: captionSublayerCount
                     )
                 }
-
-                // SINGLE-PASS: no custom compositor, animationTool works directly.
-                captionLog("[ReeLabs Caption] SINGLE-PASS: standard composition with animationTool")
-
-                let videoTracks = composition.tracks(withMediaType: .video)
-                let totalDuration = CMTimeGetSeconds(composition.duration)
-                captionLog("[ReeLabs Caption] videoTracks=\(videoTracks.count), totalDuration=\(totalDuration)s")
-
-                let captionBuildStart = CFAbsoluteTimeGetCurrent()
-                let captionLayer = CaptionLayer.createOverlay(
-                    transcriptData: transcriptData,
-                    config: captionConfig,
-                    videoSize: renderSize,
-                    totalDuration: totalDuration,
-                    exclusionZones: captionExclusionZones
-                )
-                profiler?.record("caption_layer_build", seconds: CFAbsoluteTimeGetCurrent() - captionBuildStart)
-                captionSublayerCount = captionLayer.sublayers?.count ?? 0
-                captionLog("[ReeLabs Caption] captionLayer sublayers=\(captionSublayerCount)")
-
-                let scale = NSScreen.main?.backingScaleFactor ?? 2.0
-
-                let videoLayer = CALayer()
-                videoLayer.frame = CGRect(origin: .zero, size: renderSize)
-                videoLayer.contentsScale = scale
-
-                let parentLayer = CALayer()
-                parentLayer.frame = CGRect(origin: .zero, size: renderSize)
-                parentLayer.isGeometryFlipped = true
-                parentLayer.contentsScale = scale
-                parentLayer.addSublayer(videoLayer)
-                parentLayer.addSublayer(captionLayer)
-
-                let animToolConfig = AVVideoCompositionCoreAnimationTool.Configuration(
-                    postProcessingAsVideoLayer: videoLayer,
-                    containingLayer: parentLayer
-                )
-                let animTool = AVVideoCompositionCoreAnimationTool(configuration: animToolConfig)
-
-                // Standard video composition — NO customVideoCompositorClass
-                let captionVC = AVMutableVideoComposition()
-                captionVC.animationTool = animTool
-                captionVC.renderSize = renderSize
-
-                // Match source frame rate
-                let fps: Float = videoTracks.first?.nominalFrameRate ?? 0
-                captionVC.frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps > 0 ? fps : 30))
-
-                // Standard layer instructions for pass-through rendering
-                let layerInstructions = videoTracks.map { track in
-                    AVMutableVideoCompositionLayerInstruction(assetTrack: track)
-                }
-                let instruction = AVMutableVideoCompositionInstruction()
-                instruction.timeRange = CMTimeRange(start: .zero, duration: composition.duration)
-                instruction.layerInstructions = layerInstructions
-                captionVC.instructions = [instruction]
-
-                session.videoComposition = captionVC
-                didApplyCaptions = true
-
-                captionLog("[ReeLabs Caption] Standard composition with animationTool assigned")
-                diag.append("captionMode: single-pass (standard composition + animationTool)")
-                diag.append("captionLayer sublayers: \(captionSublayerCount)")
             }
         } else if let videoComposition {
             session.videoComposition = videoComposition
@@ -308,7 +244,7 @@ final class ExportService: Sendable {
             }
             throw ExportError.exportFailed(diag.joined(separator: "\n"))
         }
-        return ExportResult(captionsApplied: didApplyCaptions, captionSublayerCount: captionSublayerCount)
+        return ExportResult(captionsApplied: false, captionSublayerCount: captionSublayerCount)
     }
 
     // MARK: - Reader/Writer Export

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Markdown-backed preset storage. One file per preset at `data/presets/{name}.md`.
+/// Markdown-backed preset storage. One file per preset at `{dataRoot}/presets/{name}.md`.
 package struct PresetStore: Sendable {
     let paths: DataPaths
 

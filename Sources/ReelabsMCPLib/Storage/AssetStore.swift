@@ -1,7 +1,7 @@
 import Foundation
 
 /// Markdown-backed asset storage. One file per asset at
-/// `data/projects/{project}/{source}.asset.md`.
+/// `{dataRoot}/projects/{project}/{source}.asset.md`.
 package struct AssetStore: Sendable {
     let paths: DataPaths
 

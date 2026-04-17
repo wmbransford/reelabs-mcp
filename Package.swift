@@ -4,7 +4,7 @@ import PackageDescription
 
 let package = Package(
     name: "ReelabsMCP",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v15)],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
@@ -23,6 +23,9 @@ let package = Package(
                 .product(name: "Yams", package: "Yams"),
             ],
             path: "Sources/ReelabsMCPLib",
+            resources: [
+                .copy("Resources/kits"),
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]

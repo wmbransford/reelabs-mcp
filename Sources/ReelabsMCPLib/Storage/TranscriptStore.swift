@@ -1,8 +1,8 @@
 import Foundation
 
 /// Markdown + JSON sidecar storage for transcripts. For each transcript:
-/// - `data/projects/{project}/{source}.transcript.md` — agent-readable utterance view
-/// - `data/projects/{project}/{source}.words.json` — immutable word-level timestamps
+/// - `{dataRoot}/projects/{project}/{source}.transcript.md` — agent-readable utterance view
+/// - `{dataRoot}/projects/{project}/{source}.words.json` — immutable word-level timestamps
 package struct TranscriptStore: Sendable {
     let paths: DataPaths
 

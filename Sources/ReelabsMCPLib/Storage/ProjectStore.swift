@@ -1,7 +1,7 @@
 import Foundation
 
-/// Markdown-backed project storage. One folder per project under `data/projects/{slug}/`
-/// with a `project.md` at its root.
+/// Markdown-backed project storage. One folder per project at
+/// `{dataRoot}/projects/{slug}/` with a `project.md` at its root.
 package struct ProjectStore: Sendable {
     let paths: DataPaths
 

@@ -4,7 +4,7 @@ import MCP
 package enum ProjectTool {
     package static let tool = Tool(
         name: "reelabs_project",
-        description: "Manage projects. Actions: create (name, description?), list (status?), get (slug), archive (slug), delete (slug). Projects are folders under data/projects/ identified by slugs derived from the project name.",
+        description: "Manage projects. Actions: create (name, description?), list (status?), get (slug), archive (slug), delete (slug). Each project is a folder under the data root's projects/ directory, identified by a slug derived from the project name.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([

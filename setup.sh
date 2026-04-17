@@ -28,9 +28,6 @@ echo ""
 # --- launchd daemon setup ---
 echo "Setting up launchd daemon..."
 
-# Resolve GOOGLE_APPLICATION_CREDENTIALS
-GOOGLE_CREDS="${GOOGLE_APPLICATION_CREDENTIALS:-$SCRIPT_DIR/service-account.json}"
-
 # Unload existing agent if running
 if launchctl list 2>/dev/null | grep -q "$PLIST_LABEL"; then
     echo "Stopping existing daemon..."
@@ -53,11 +50,6 @@ cat > "$PLIST_PATH" <<PLIST
     </array>
     <key>WorkingDirectory</key>
     <string>${SCRIPT_DIR}</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>GOOGLE_APPLICATION_CREDENTIALS</key>
-        <string>${GOOGLE_CREDS}</string>
-    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -117,3 +109,6 @@ echo "  Logs:    tail -f /tmp/reelabs-mcp.stderr.log"
 echo "  Stdio:   $BINARY_PATH --stdio"
 echo ""
 echo "Restart Claude Code to pick up the HTTP transport."
+echo ""
+echo "Next: sign in to enable transcription."
+echo "  $BINARY_PATH sign-in"

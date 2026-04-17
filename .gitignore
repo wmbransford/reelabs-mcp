@@ -4,6 +4,7 @@
 *.db-wal
 reelabs-caption-debug.log
 service-account.json
+config.json
 .DS_Store
 **/.DS_Store
 Generated Graphics/
@@ -11,6 +12,8 @@ Extracted Frames/
 .obsidian/
 data/projects/
 data/presets/
+data/kits/
+data/Media/
 
 # Firebase Functions
 functions/node_modules/

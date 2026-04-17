@@ -64,20 +64,33 @@ package enum TranscribeTool {
             let flacURL = try await AudioExtractor.extractAudio(from: videoURL)
             defer { try? FileManager.default.removeItem(at: flacURL) }
 
-            // Transcribe with Chirp
-            guard let saPath = config.serviceAccountPath else {
-                return .init(content: [.text(text: "Transcription requires service_account_path in config.json", annotations: nil, _meta: nil)], isError: true)
+            // Transcribe via the ReeLabs proxy (Cloud Functions → Chirp).
+            let storedToken = try? TokenKeychain.read()
+            guard let apiToken = storedToken ?? nil, !apiToken.isEmpty else {
+                return .init(content: [.text(
+                    text: "Not signed in. Tell the user to run `reelabs-mcp sign-in` in their terminal, then retry.",
+                    annotations: nil, _meta: nil
+                )], isError: true)
             }
-            let client = try ChirpClient(
-                serviceAccountPath: saPath,
-                location: config.chirpLocation,
-                model: config.chirpModel
-            )
-            let transcriptData = try await client.transcribe(
-                flacURL: flacURL,
-                durationSeconds: durationSeconds,
-                language: language
-            )
+            let client = ChirpClient(proxyURL: ProxyEndpoints.transcribe, apiToken: apiToken)
+            let transcriptData: TranscriptData
+            do {
+                transcriptData = try await client.transcribe(
+                    flacURL: flacURL,
+                    durationSeconds: durationSeconds,
+                    language: language
+                )
+            } catch ChirpError.unauthenticated {
+                return .init(content: [.text(
+                    text: "Sign-in has expired. Tell the user to run `reelabs-mcp sign-in` again.",
+                    annotations: nil, _meta: nil
+                )], isError: true)
+            } catch ChirpError.quotaExceeded(let body) {
+                return .init(content: [.text(
+                    text: "Free-tier quota reached. Upgrade at https://reelabs.ai to continue. (\(body))",
+                    annotations: nil, _meta: nil
+                )], isError: true)
+            }
 
             // Build compact transcript for agent context
             let compactArray = TranscriptCompactor.compact(words: transcriptData.words)

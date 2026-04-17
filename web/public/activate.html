@@ -7,69 +7,75 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/assets/style.css" />
   </head>
   <body>
     <nav class="nav">
-      <a href="/" class="nav-logo">Ree<span>Labs</span></a>
+      <a href="/" class="nav-logo" aria-label="ReeLabs">
+        <svg class="brand-mark" viewBox="0 0 42 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M0 9 Q3 1 6 9 Q9 17 12 9 Q15 1 18 9 Q21 17 24 9 Q27 1 30 9 Q33 17 36 9 Q39 1 42 9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><path d="M0 9 Q3 17 6 9 Q9 1 12 9 Q15 17 18 9 Q21 1 24 9 Q27 17 30 9 Q33 1 36 9 Q39 17 42 9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><rect x="2" y="6" width="2" height="6" rx="0.6"/><rect x="8" y="6" width="2" height="6" rx="0.6"/><rect x="14" y="6" width="2" height="6" rx="0.6"/><rect x="20" y="6" width="2" height="6" rx="0.6"/><rect x="26" y="6" width="2" height="6" rx="0.6"/><rect x="32" y="6" width="2" height="6" rx="0.6"/><rect x="38" y="6" width="2" height="6" rx="0.6"/></svg>
+        ReeLabs
+      </a>
     </nav>
 
     <main>
-      <div class="container" style="max-width: 520px">
-        <h1 style="font-size: 32px">Activate ReeLabs</h1>
+      <div class="container container-narrow">
+        <div class="eyebrow">
+          <span class="dot"></span>
+          Device activation
+        </div>
+
+        <h1 style="font-size: 40px">
+          Connect <span class="accent-italic">this</span> device.
+        </h1>
         <p class="subtitle" style="font-size: 16px">
-          Sign in and confirm the code shown in Claude to connect this device.
+          Sign in and enter the activation code shown in Claude.
         </p>
 
         <div id="form" class="card">
-          <label
-            for="code-input"
-            style="display: block; font-size: 13px; color: var(--cream-dim); margin-bottom: 8px"
-            >Activation code</label
-          >
+          <label for="code-input" class="activate-label">Activation code</label>
           <input
             id="code-input"
+            class="activate-input"
             type="text"
             placeholder="ABCD-1234"
             autocomplete="off"
             autocapitalize="characters"
             spellcheck="false"
-            style="
-              width: 100%;
-              padding: 14px 16px;
-              background: var(--surface-2);
-              border: 1px solid var(--border);
-              border-radius: 10px;
-              color: var(--cream);
-              font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-              font-size: 18px;
-              font-weight: 600;
-              letter-spacing: 0.12em;
-              text-transform: uppercase;
-              margin-bottom: 20px;
-            "
           />
 
-          <div id="user-info" style="display: none; align-items: center; gap: 12px; margin-bottom: 16px">
-            <span style="color: var(--cream-dim); font-size: 14px">Signed in as</span>
-            <span id="user-email" style="font-size: 14px; font-weight: 600"></span>
+          <div id="user-info" class="signed-in-row">
+            <span class="label">Signed in as</span>
+            <span id="user-email" class="value"></span>
           </div>
 
-          <div style="display: flex; gap: 10px">
-            <button id="sign-in-btn" class="btn btn-primary" style="flex: 1">
-              <svg width="18" height="18" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+          <div style="display: flex; gap: 10px; flex-wrap: wrap">
+            <button id="sign-in-btn" class="btn btn-secondary" style="flex: 1; min-width: 180px">
+              <svg width="16" height="16" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
                 <path
-                  fill="#fff"
-                  d="M44.5 20H24v8.5h11.8C34.7 33.9 30 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"
+                  fill="#EA4335"
+                  d="M24 9.5c3.5 0 6.6 1.2 9.1 3.5l6.8-6.8C35.6 2.1 30.1 0 24 0 14.7 0 6.7 5.3 2.8 13.1l7.9 6.1C12.6 13.7 17.8 9.5 24 9.5z"
+                />
+                <path
+                  fill="#4285F4"
+                  d="M46.5 24.5c0-1.6-.1-3.2-.4-4.7H24v9h12.7c-.5 2.9-2.2 5.4-4.7 7.1l7.6 5.9c4.4-4.1 6.9-10.1 6.9-17.3z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M10.7 28.8c-.5-1.4-.7-2.9-.7-4.5s.3-3.1.7-4.5l-7.9-6.1C1 17.2 0 20.5 0 24s1 6.8 2.8 10.2l7.9-5.4z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.8 2.3-8.3 2.3-6.2 0-11.4-4.2-13.3-9.9l-7.9 5.4C6.7 42.7 14.7 48 24 48z"
                 />
               </svg>
               Sign in with Google
             </button>
-            <button id="activate-btn" class="btn btn-primary" style="flex: 1" disabled>
+            <button id="activate-btn" class="btn btn-primary" style="flex: 1; min-width: 180px" disabled>
               Connect device
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
             </button>
           </div>
 
@@ -77,16 +83,21 @@
         </div>
 
         <div id="success" class="card" style="display: none; text-align: center">
-          <div style="font-size: 32px; margin-bottom: 12px">✓</div>
-          <h2 style="margin: 0 0 8px">Device connected</h2>
-          <p style="color: var(--cream-dim); margin: 0 0 20px">
+          <div style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 50%; background: var(--accent-tint); color: var(--status-green); font-size: 22px; margin-bottom: 14px">✓</div>
+          <h2 style="margin: 0 0 8px; font-size: 22px; color: var(--ink)">Device connected</h2>
+          <p style="color: var(--ink-2); margin: 0 0 4px">
             Return to Claude and retry your request.
           </p>
         </div>
       </div>
     </main>
 
-    <footer class="footer">ReeLabs · reelabs.ai</footer>
+    <footer class="footer">
+      <div class="footer-left">
+        <svg class="brand-mark" viewBox="0 0 42 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M0 9 Q3 1 6 9 Q9 17 12 9 Q15 1 18 9 Q21 17 24 9 Q27 1 30 9 Q33 17 36 9 Q39 1 42 9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><path d="M0 9 Q3 17 6 9 Q9 1 12 9 Q15 17 18 9 Q21 1 24 9 Q27 17 30 9 Q33 1 36 9 Q39 17 42 9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><rect x="2" y="6" width="2" height="6" rx="0.6"/><rect x="8" y="6" width="2" height="6" rx="0.6"/><rect x="14" y="6" width="2" height="6" rx="0.6"/><rect x="20" y="6" width="2" height="6" rx="0.6"/><rect x="26" y="6" width="2" height="6" rx="0.6"/><rect x="32" y="6" width="2" height="6" rx="0.6"/><rect x="38" y="6" width="2" height="6" rx="0.6"/></svg>
+        <span>ReeLabs · reelabs.ai</span>
+      </div>
+    </footer>
 
     <script type="module" src="/assets/activate.js"></script>
   </body>

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Markdown-backed render storage. One file per render at
-/// `data/projects/{project}/{render}.render.md`.
+/// `{dataRoot}/projects/{project}/{render}.render.md`.
 /// The full RenderSpec is embedded as a fenced ```json block inside the markdown body
 /// so `reelabs_rerender` can rehydrate and re-run it.
 package struct RenderStore: Sendable {

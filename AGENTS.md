@@ -25,7 +25,8 @@ swift package resolve              # after Package.swift changes
 - **Swift 6.2**, strict concurrency mode, **macOS 26+** minimum
 - Dependencies: `MCP` (swift-sdk >=0.12.0), `Yams` (>=5.0.0), `swift-nio`, `swift-log`
 - `config.json` must be in the working directory or next to the binary. Set `data_path` to the `data/` folder location.
-- `service-account.json` is gitignored — required for transcription only
+- Transcription auth is **keychain-backed**: `reelabs-mcp sign-in` runs the OAuth 2.0 device-code flow, stores the API token in the macOS login keychain (`service=ai.reelabs.mcp`), and hands it to the Cloud Functions proxy at `us-central1-orbit-ai-d1f41.cloudfunctions.net/transcribe`. No service-account JSON on disk.
+- Override proxy base for dev with `REELABS_PROXY_BASE=http://localhost:5001/orbit-ai-d1f41/us-central1` (Functions emulator).
 
 ## Package Architecture
 
@@ -57,15 +58,15 @@ Sources/
     ├── ValueConversion.swift       ← MCP Value → Foundation JSON bridge
     ├── HTTPServer.swift            ← HTTP transport layer (NIO-based, serves /mcp endpoint)
     ├── Storage/
-    │   ├── Paths.swift             ← DataPaths: resolves all data/ subpaths from the root URL
+    │   ├── Paths.swift             ← DataPaths: resolves projects/, presets/, kits/, Media/ subpaths from the root URL
     │   ├── Models.swift            ← Codable record types (ProjectRecord, AssetRecord, TranscriptRecord, etc.)
     │   ├── MarkdownStore.swift     ← Atomic read/write of markdown + YAML front matter, writeAtomicPair
     │   ├── SlugGenerator.swift     ← slugify() + uniqueSlug()
-    │   ├── ProjectStore.swift      ← CRUD on data/projects/{slug}/project.md
+    │   ├── ProjectStore.swift      ← CRUD on {dataRoot}/projects/{slug}/project.md
     │   ├── AssetStore.swift        ← CRUD on {project}/{source}.asset.md
     │   ├── TranscriptStore.swift   ← CRUD on {project}/{source}.transcript.md + .words.json
     │   ├── RenderStore.swift       ← CRUD on {project}/{render}.render.md (spec embedded as fenced json)
-    │   ├── PresetStore.swift       ← CRUD on data/presets/{name}.md
+    │   ├── PresetStore.swift       ← CRUD on {dataRoot}/presets/{name}.md
     │   └── AnalysisStore.swift     ← CRUD on {project}/{source}.analysis.md + .scenes.json
     ├── Models/
     │   └── RenderSpec.swift        ← All render types: RenderSpec, SegmentSpec, CaptionConfig, Overlay, etc.
