@@ -25,13 +25,13 @@ enum AudioExtractor {
         let duration = try await asset.load(.duration)
         session.timeRange = CMTimeRange(start: .zero, duration: duration)
 
-        nonisolated(unsafe) let unsafeSession = session
+        let sessionBox = UncheckedSendableBox(session)
         let exportTask = Task {
-            try await unsafeSession.export(to: outputURL, as: .m4a)
+            try await sessionBox.value.export(to: outputURL, as: .m4a)
         }
         let timeoutTask = Task {
             try await Task.sleep(for: .seconds(180))
-            unsafeSession.cancelExport()
+            sessionBox.value.cancelExport()
         }
         do {
             try await exportTask.value
@@ -112,6 +112,11 @@ enum AudioExtractor {
 
         return flacURL
     }
+}
+
+private struct UncheckedSendableBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }
 
 enum AudioExtractorError: LocalizedError {
