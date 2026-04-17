@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ReeLabs — AI video editing inside Claude</title>
+    <meta
+      name="description"
+      content="ReeLabs is an MCP server that lets Claude edit your videos natively. Transcribe, cut, caption, and render — all by describing what you want."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/style.css" />
+  </head>
+  <body>
+    <nav class="nav">
+      <a href="/" class="nav-logo">Ree<span>Labs</span></a>
+      <a href="/activate" class="btn btn-secondary" style="padding: 8px 14px; font-size: 14px"
+        >Sign in</a
+      >
+    </nav>
+
+    <main>
+      <div class="container">
+        <h1>AI video editing,<br />inside Claude.</h1>
+        <p class="subtitle">
+          ReeLabs is an MCP server for Claude. Transcribe, cut, caption, and render video by
+          describing the edit you want. Runs natively on your Mac — no uploads, no re-encoding,
+          no subscription to a fourth cloud.
+        </p>
+
+        <h2>Install</h2>
+        <div class="install-block">
+          <div><span class="prompt">$</span> brew install reelabs/tap/reelabs-mcp</div>
+          <div><span class="prompt">$</span> reelabs-mcp sign-in</div>
+        </div>
+
+        <h2>Then add to Claude</h2>
+        <div class="install-block">
+          <div><span class="prompt">$</span> claude mcp add reelabs reelabs-mcp</div>
+        </div>
+
+        <div style="margin-top: 40px; display: flex; gap: 12px">
+          <a href="/activate" class="btn btn-primary">Sign in to get started</a>
+        </div>
+      </div>
+    </main>
+
+    <footer class="footer">
+      ReeLabs · native video editing for Claude · reelabs.ai
+    </footer>
+  </body>
+</html>

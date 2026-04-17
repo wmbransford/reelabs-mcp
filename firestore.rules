@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users can read their own profile. Functions write via Admin SDK (bypasses rules).
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Device codes and API tokens: functions-only (Admin SDK bypass).
+    match /deviceCodes/{code} {
+      allow read, write: if false;
+    }
+    match /apiTokens/{tokenHash} {
+      allow read, write: if false;
+    }
+
+    // Default deny.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

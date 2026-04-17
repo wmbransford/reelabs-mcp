@@ -11,3 +11,11 @@ Extracted Frames/
 .obsidian/
 data/projects/
 data/presets/
+
+# Firebase Functions
+functions/node_modules/
+functions/lib/
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+.runtimeconfig.json
