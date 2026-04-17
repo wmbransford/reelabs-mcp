@@ -27,6 +27,7 @@ final class ChirpClient: Sendable {
 
     private let maxChunkSeconds = 55.0
     private let overlapSeconds = 5.0
+    private let maxConcurrentChunks = 10
 
     private func transcribeChunkedSync(
         flacURL: URL,
@@ -38,12 +39,15 @@ final class ChirpClient: Sendable {
             for chunk in chunks { try? FileManager.default.removeItem(at: chunk.url) }
         }
 
-        captionLog("[ChirpClient] Split \(String(format: "%.1f", durationSeconds))s audio into \(chunks.count) chunks for parallel sync transcription")
+        captionLog("[ChirpClient] Split \(String(format: "%.1f", durationSeconds))s audio into \(chunks.count) chunks (max \(maxConcurrentChunks) concurrent)")
 
         let results: [(offset: Double, transcript: TranscriptData)] = try await withThrowingTaskGroup(
             of: (index: Int, offset: Double, transcript: TranscriptData).self
         ) { group in
-            for (index, chunk) in chunks.enumerated() {
+            var iterator = chunks.enumerated().makeIterator()
+
+            func addNext() -> Bool {
+                guard let (index, chunk) = iterator.next() else { return false }
                 group.addTask {
                     let transcript = try await self.transcribeSync(
                         flacURL: chunk.url,
@@ -52,11 +56,17 @@ final class ChirpClient: Sendable {
                     )
                     return (index: index, offset: chunk.offsetSeconds, transcript: transcript)
                 }
+                return true
+            }
+
+            for _ in 0..<maxConcurrentChunks {
+                if !addNext() { break }
             }
 
             var collected: [(index: Int, offset: Double, transcript: TranscriptData)] = []
-            for try await result in group {
+            while let result = try await group.next() {
                 collected.append(result)
+                _ = addNext()
             }
             return collected.sorted { $0.index < $1.index }
                 .map { (offset: $0.offset, transcript: $0.transcript) }
