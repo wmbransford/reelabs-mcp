@@ -28,7 +28,7 @@ musicVolume: 0.0
    - Answer or reaction → speaker B
    - Laugh / crosstalk → whichever source captures it better
 4. **Build segments** from each source's utterance timestamps. Alternate between A and B as the conversation flows. Pad ~0.2s at segment edges (slightly more than default — gives conversational breathing room).
-5. **Verification checkpoint** — show the per-speaker word count and segment count. Flag suspicious words from both transcripts. Wait for confirmation.
+5. **Propose + verify in one message** — show the per-speaker word count and segment count, any `flagged_words` / `flagged_utterances` from either transcribe response that fall inside your proposed ranges, and the kit settings. Wait for the user's "go". Do not re-prompt after they pick.
 6. **Render** — both sources in the `sources` array with their respective `transcriptId` set. `aspectRatio: "16:9"`, `captions: {preset: "interview_attribution"}`, `quality: {codec: "hevc"}`. Use `subtle` keyframes on each segment: `[{time: 0, scale: 1.0}, {time: segment_duration, scale: 1.05}]`.
 
 ## Variants

@@ -23,7 +23,7 @@ musicVolume: 0.0
 2. **Transcribe** the narration source.
 3. **Identify the clip** — ask the user for the highlight moment (timestamp range or keyword). Find that range in the transcript.
 4. **Tight cut** — use `reelabs_silence_remove` with a tighter threshold (`gap_threshold: 0.3`) since podcast clips benefit from brisk pacing. Keep segments inside the highlight range.
-5. **Verification checkpoint** — flag suspicious words (podcast transcription is prone to errors on proper nouns, industry jargon). Show the clip duration and word count. Wait for confirmation.
+5. **Propose + verify in one message** — show the clip duration and word count, any `flagged_words` / `flagged_utterances` from the transcribe response that fall inside the clip range (podcast transcription is prone to errors on proper nouns and industry jargon), and the kit settings. Wait for the user's "go". Do not re-prompt after they pick.
 6. **Render** — `aspectRatio: "9:16"`, `captions: {preset: "podcast_big"}`, subtle keyframes `[{time: 0, scale: 1.0}, {time: segment_duration, scale: 1.03}]`, `quality: {codec: "hevc"}`.
 
 ## Variants

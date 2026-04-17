@@ -66,7 +66,9 @@ package enum TranscriptTool {
                 guard let record = try store.getRecord(project: parts.project, source: parts.source) else {
                     return .init(content: [.text(text: "Transcript not found: \(id)", annotations: nil, _meta: nil)], isError: true)
                 }
-                let entries = try store.getCompactEntries(project: parts.project, source: parts.source)
+                guard let mdFile = try store.getMarkdown(project: parts.project, source: parts.source) else {
+                    return .init(content: [.text(text: "Transcript markdown missing: \(id)", annotations: nil, _meta: nil)], isError: true)
+                }
                 let response: [String: Any] = [
                     "transcript_id": id,
                     "project": parts.project,
@@ -76,7 +78,7 @@ package enum TranscriptTool {
                     "word_count": record.wordCount,
                     "language": record.language,
                     "mode": record.mode,
-                    "transcript": entries
+                    "transcript_markdown": mdFile.body
                 ]
                 let data = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
                 return .init(content: [.text(text: String(data: data, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)

@@ -28,7 +28,7 @@ musicVolume: 0.2
    - Each visual = full-frame overlay (`x: 0, y: 0, width: 1, height: 1`) with its time range on the composition timeline
    - Use `crossfade` transitions between visuals (`fadeIn: 0.4, fadeOut: 0.4`)
 5. **Apply Ken Burns keyframes** to each visual overlay — slow scale from 1.0 to 1.1 over the overlay duration, with a slight pan. Alternate pan direction per visual (`panX: 0.05` then `panX: -0.05`) to avoid monotony.
-6. **Verification checkpoint** — flag suspicious words in the narration. Show the visual-to-narration mapping (e.g. "0–5s: image_01.jpg, 5–12s: image_02.jpg"). Wait for confirmation.
+6. **Propose + verify in one message** — show the visual-to-narration mapping (e.g. "0–5s: image_01.jpg, 5–12s: image_02.jpg"), any `flagged_words` / `flagged_utterances` from the narration transcribe response, and the kit settings. Wait for the user's "go". Do not re-prompt after they pick.
 7. **Render** — `aspectRatio: "16:9"`, `captions: {preset: "slideshow_serif"}`, `audio: {musicPath: "...", musicVolume: 0.2}`, `quality: {codec: "hevc"}`.
 
 ## Variants

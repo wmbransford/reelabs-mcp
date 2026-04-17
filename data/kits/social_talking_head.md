@@ -19,10 +19,9 @@ musicVolume: 0.0
 1. **Probe** the source — note duration and resolution. Warn if source is landscape (will be center-cropped).
 2. **Transcribe** the source.
 3. **Cut** — run `reelabs_silence_remove` with `gap_threshold: 0.4, padding: 0.15`. Drop the returned segments into the spec.
-4. **Review cuts** — show the user: number of segments, total duration, time saved. Offer to filter any obvious retakes or off-topic tangents.
-5. **Verification checkpoint** — flag any suspicious words from the transcript (short, unusual, near long gaps, near-duplicates). Show the segment summary. Wait for user confirmation.
-6. **Apply engaging keyframes** — for each segment, alternate between push-in `[{time: 0, scale: 1.0}, {time: segment_duration, scale: 1.15}]` and pull-back `[{time: 0, scale: 1.15}, {time: segment_duration, scale: 1.0}]`. Skip keyframes on segments shorter than 2s.
-7. **Render** with `aspectRatio: "9:16"`, `captions: {preset: "william"}`, `quality: {codec: "hevc"}`.
+4. **Propose + verify in one message** — show the segment summary (count, total duration, time saved), any `flagged_words` / `flagged_utterances` from the transcribe response that fall inside your proposed ranges, and the kit settings. Wait for the user's "go". Do not re-run the flagger or re-prompt after they pick.
+5. **Apply engaging keyframes** — for each segment, alternate between push-in `[{time: 0, scale: 1.0}, {time: segment_duration, scale: 1.15}]` and pull-back `[{time: 0, scale: 1.15}, {time: segment_duration, scale: 1.0}]`. Skip keyframes on segments shorter than 2s.
+6. **Render** with `aspectRatio: "9:16"`, `captions: {preset: "william"}`, `quality: {codec: "hevc"}`.
 
 ## Variants
 

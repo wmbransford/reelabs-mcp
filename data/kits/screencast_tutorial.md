@@ -25,7 +25,7 @@ musicVolume: 0.0
 3. **Plan the layout timeline** — ask the user where they want PiP vs. split vs. speaker-only vs. screen-only. Default is PiP for intro/outro, screen-only for the demo middle.
 4. **Generate overlays** with `reelabs_layout`, passing the screen and speaker source IDs and the timeline.
 5. **Build segments** from the screen source — one segment spanning the full narration, or multiple segments if cutting dead air (use `reelabs_silence_remove` on the screen transcript if there's enough silence to matter).
-6. **Verification checkpoint** — flag suspicious transcript words, show the layout timeline in plain English ("0–15s: PiP, 15–90s: screen only, 90–105s: PiP"), wait for confirmation.
+6. **Propose + verify in one message** — show the layout timeline in plain English ("0–15s: PiP, 15–90s: screen only, 90–105s: PiP"), any `flagged_words` / `flagged_utterances` that fall inside your proposed ranges, and the kit settings. Wait for the user's "go". Do not re-prompt after they pick.
 7. **Render** — screen source as base segment, layout overlays from step 4, `aspectRatio: "16:9"`, `captions: {preset: "screencast_clean"}`, `quality: {codec: "h264"}`.
 
 ## Variants

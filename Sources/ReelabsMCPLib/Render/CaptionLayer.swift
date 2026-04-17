@@ -536,7 +536,8 @@ enum CaptionLayer {
     private static func formatWord(_ word: String, allCaps: Bool, stripPunctuation: Bool) -> String {
         var result = word
         if stripPunctuation {
-            result = result.filter { !$0.isPunctuation }
+            // Preserve apostrophes so contractions like "don't", "it's" stay intact.
+            result = result.filter { !$0.isPunctuation || $0 == "'" || $0 == "\u{2019}" }
         }
         if allCaps {
             result = result.uppercased()

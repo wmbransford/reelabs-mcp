@@ -74,7 +74,7 @@ Maps to `audio`:
 
 ## After the four questions
 
-1. Follow the default workflow: probe → transcribe → cut (silence_remove) → review → verify → render.
+1. Follow the default workflow: probe → transcribe → cut (silence_remove) → propose + verify in one message (segment summary + `flagged_words` / `flagged_utterances` that fall inside your proposed ranges + kit settings) → render.
 2. Apply the answers as the RenderSpec settings.
 3. Use `hevc` codec and `0.15` padding as defaults unless the user overrides.
 4. **Only ask follow-ups if a combination has a real consequence.** Examples where a follow-up is warranted:

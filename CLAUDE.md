@@ -79,7 +79,7 @@ If the user skips the kit question ("just cut this up" without context), default
 
 - **Segment selection is the job.** Never just use `start: 0, end: N` — that's raw unedited footage.
 - Use utterance `start`/`end` timestamps from the transcript to set precise cut points.
-- **Pre-render verification is mandatory when captions are burned in.** Show flagged transcript words (the `flagged_words` array from the transcribe response), the segment summary, and wait for user confirmation. Skip only for non-caption renders, re-renders where caption text isn't changing, or when the user has already reviewed.
+- **One verification checkpoint, not two.** When you propose clips, bundle everything the user needs to decide in a single message: the candidate list, the relevant `flagged_words` / `flagged_utterances` from the transcribe response (only flags that fall inside your proposed ranges — don't dump the full list), and the kit settings you'll apply. Then render on their first "go". Do not run or re-surface the flagger as a separate step after the user picks. Skip the checkpoint only for non-caption renders, re-renders where caption text isn't changing, or when the user explicitly says to just render.
 - When the user asks for captions, include `captions` in the RenderSpec. For multi-source edits, set `transcriptId` on each source. For single-source edits, set `transcriptId` in `captions`.
 - **Generated overlays** (color cards, text cards) do not need a source file. Use them for intros, outros, title screens, and transitions. See the `text` object in the Technical Reference below.
 - **Image overlays**: Use `reelabs_graphic` to generate PNG graphics (title cards, lower thirds, etc.), then reference them via `imagePath` in overlays.
@@ -151,22 +151,18 @@ Use for handing audio off to an external editor (Audacity, Adobe Audition, Logic
 
 ### Transcribe Response
 
-`reelabs_transcribe` returns a compact transcript grouped by silence gaps (>= 400ms), plus heuristic flags for pre-render verification.
+`reelabs_transcribe` returns the compact markdown transcript inline (same body written to disk), plus heuristic flags for pre-render verification.
 
 ```json
 {
   "transcript_id": "project-slug/source-slug",
+  "project": "project-slug",
+  "source": "source-slug",
   "word_count": 150,
   "duration_seconds": 45.2,
   "source_path": "/path/to/file.mp4",
   "mode": "sync",
-  "transcript": [
-    {"start": 0.0, "end": 2.5, "text": "This is the opening statement"},
-    {"gap": 0.8},
-    {"start": 3.3, "end": 5.1, "text": "And here is the response"},
-    {"gap": 2.1},
-    {"start": 7.6, "end": 12.3, "text": "Actually let me start over"}
-  ],
+  "transcript_markdown": "# Transcript: file.mp4\n\n- [0:00.00 – 0:02.50] This is the opening statement\n- [0:03.30 – 0:05.10] And here is the response\n- [0:07.60 – 0:12.30] Actually let me start over\n",
   "flagged_words": [
     {"word": "Chirp", "start": 4.2, "end": 4.5, "reason": "unusual character pattern", "context": "speech model is [Chirp] from Google"}
   ],
@@ -181,13 +177,12 @@ Use for handing audio off to an external editor (Audacity, Adobe Audition, Logic
 }
 ```
 
-- **Utterance**: `{"start", "end", "text"}` — words grouped between silence gaps, timestamps in seconds (1 decimal).
-- **Gap**: `{"gap": seconds}` — silence >= 400ms between utterances.
+- **transcript_markdown**: human-readable utterance list, `- [M:SS.SS – M:SS.SS] text` per line. Use these timestamps directly for segment selection — no need to read the on-disk file separately.
 - **mode**: `"sync"` for audio <= 55s, `"chunked-sync (N chunks)"` for longer files.
 - **flagged_words**: suspicious words the agent should review with the user before burning captions. Reasons: `unusually short word`, `unusual character pattern`, `adjacent to long silence gap`, `low confidence (N%)`.
 - **flagged_utterances**: near-duplicate utterances (Jaccard similarity ≥ 0.7) — likely retakes. Each entry includes the earlier utterance it matches so the agent can ask the user which one to keep.
 
-Word-level timestamps are stored internally and used automatically by the caption renderer. The agent works with utterance-level timestamps for segment selection. Use `flagged_words` and `flagged_utterances` as the basis for the verification checkpoint before rendering with captions.
+Word-level timestamps are stored internally and used automatically by the caption renderer. Use `flagged_words` and `flagged_utterances` as the basis for the verification checkpoint before rendering with captions. To rehydrate a prior transcript later, call `reelabs_transcript get` with the `transcript_id` — it returns the same `transcript_markdown` field.
 
 ### Silence Remove Response
 
@@ -388,7 +383,7 @@ If any source has `transcriptId`, per-source mode is used. Otherwise, `captions.
 | `allCaps` | bool | true | uppercase all caption text |
 | `shadow` | bool | true | drop shadow behind text |
 | `wordsPerGroup` | int | 3 | words shown per caption group |
-| `punctuation` | bool | true | show punctuation in captions |
+| `punctuation` | bool | true | show terminal punctuation (periods, commas, `?`, `!`) in captions. Apostrophes in contractions are always preserved regardless of this setting. |
 
 Inline fields override preset values. Omitted fields fall back to the preset.
 

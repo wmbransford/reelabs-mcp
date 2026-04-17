@@ -114,7 +114,9 @@ package enum TranscribeTool {
             // review misheard words and probable retakes before burning captions.
             let flags = TranscriptFlagger.flag(words: wordEntries)
 
-            // Return the compact transcript the agent sees
+            // Return the markdown utterance view inline — same shape written to disk.
+            // Markdown is roughly half the size of the JSON array form and easier to scan.
+            let transcriptMarkdown = TranscriptStore.formatBody(record: record, entries: compactArray)
             let transcriptId = "\(projectSlug)/\(sourceSlug)"
             let response: [String: Any] = [
                 "transcript_id": transcriptId,
@@ -122,7 +124,7 @@ package enum TranscribeTool {
                 "source": sourceSlug,
                 "word_count": transcriptData.words.count,
                 "duration_seconds": round(transcriptData.durationSeconds * 100) / 100,
-                "transcript": compactArray,
+                "transcript_markdown": transcriptMarkdown,
                 "source_path": path,
                 "mode": mode,
                 "flagged_words": flags.flaggedWords,
