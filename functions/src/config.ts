@@ -12,4 +12,4 @@ export const CHIRP_LOCATION = "us";
 export const CHIRP_MODEL = "chirp_3";
 export const CHIRP_PROJECT_ID = "orbit-ai-d1f41";
 
-export const FREE_TIER_MINUTES_PER_MONTH = 10;
+export const FREE_TIER_MINUTES_PER_MONTH = 90;
