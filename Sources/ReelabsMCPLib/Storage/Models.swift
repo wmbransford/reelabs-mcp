@@ -187,44 +187,6 @@ package struct RenderRecord: Codable, Sendable {
     }
 }
 
-// MARK: - Preset
-
-package struct PresetRecord: Codable, Sendable {
-    package var schemaVersion: Int
-    package var name: String
-    package var type: String
-    package var description: String?
-    package var created: String
-    package var updated: String
-    /// The preset's configuration as arbitrary key-value pairs, flattened into the front matter.
-    /// Stored as a JSON-serialized string for simple round-tripping; not part of the Codable
-    /// front matter struct (kept separate to keep the schema flexible).
-    package var configJson: String
-
-    package init(
-        name: String,
-        type: String,
-        configJson: String,
-        description: String? = nil,
-        created: String = Timestamp.now(),
-        updated: String? = nil
-    ) {
-        self.schemaVersion = 1
-        self.name = name
-        self.type = type
-        self.configJson = configJson
-        self.description = description
-        self.created = created
-        self.updated = updated ?? created
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version"
-        case name, type, description, created, updated
-        case configJson = "config_json"
-    }
-}
-
 // MARK: - Visual Analysis
 
 package struct AnalysisRecord: Codable, Sendable {

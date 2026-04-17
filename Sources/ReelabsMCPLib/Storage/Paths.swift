@@ -21,10 +21,17 @@ package struct DataPaths: Sendable {
 
     package var projectsDir: URL { root.appendingPathComponent("projects", isDirectory: true) }
     package var presetsDir: URL { root.appendingPathComponent("presets", isDirectory: true) }
-    package var kitsDir: URL { root.appendingPathComponent("kits", isDirectory: true) }
+    package var flowsDir: URL { root.appendingPathComponent("flows", isDirectory: true) }
+    package var referenceDir: URL { root.appendingPathComponent("reference", isDirectory: true) }
     package var mediaDir: URL { root.appendingPathComponent("Media", isDirectory: true) }
     package var framesDir: URL { mediaDir.appendingPathComponent("Frames", isDirectory: true) }
     package var graphicsDir: URL { mediaDir.appendingPathComponent("Graphics", isDirectory: true) }
+
+    /// Subfolder for a given preset category (`captions`, `framing`, `overlays`, `transitions`, `audio`).
+    /// Legacy flat caption presets still live directly in `presetsDir` — only new categories use subdirs.
+    package func presetCategoryDir(_ category: String) -> URL {
+        presetsDir.appendingPathComponent(category, isDirectory: true)
+    }
 
     // MARK: - Project-scoped paths
 

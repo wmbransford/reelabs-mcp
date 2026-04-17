@@ -41,16 +41,11 @@
         </div>
 
         <h1>
-          AI video editing,<br />
-          <span class="accent-italic">inside</span> Claude.
+          AI video editing <span class="accent-italic">inside</span> Claude.<br />
+          <span class="accent-italic">Seriously</span>.
         </h1>
 
-        <p class="subtitle">
-          ReeLabs is an MCP server for Claude. Transcribe, cut, caption, and render video by
-          describing the edit you want — no uploads, no re-encoding, no fourth cloud subscription.
-        </p>
-
-        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px">
+        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px">
           <a href="/activate" class="btn btn-primary">
             Sign in to get started
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
@@ -58,24 +53,17 @@
           <a href="#install" class="btn btn-secondary">Install instructions</a>
         </div>
 
+        <p class="subtitle">
+          AI understands your footage and allows you to edit however you want.
+        </p>
+
         <div class="session-mock" aria-hidden="true">
-          <div class="session-header">
-            <span class="dot red"></span>
-            <span class="dot yellow"></span>
-            <span class="dot green"></span>
-            <span class="crumbs">
-              <svg class="brand-mark" viewBox="0 0 42 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M1 6.5 L3.5 6.5 C5.5 6.5 7.5 4.5 9.5 4.5 C11.5 4.5 13.5 3 15.5 3 C17.5 3 19.5 5.5 21.5 5.5 C23.5 5.5 25.5 8.5 27.5 8.5 C29.5 8.5 31.5 9.5 33.5 9.5 C35.5 9.5 37.5 7 39.5 7 L41 7" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 11.5 L3.5 11.5 C5.5 11.5 7.5 9.5 9.5 9.5 C11.5 9.5 13.5 8 15.5 8 C17.5 8 19.5 10.5 21.5 10.5 C23.5 10.5 25.5 13.5 27.5 13.5 C29.5 13.5 31.5 14.5 33.5 14.5 C35.5 14.5 37.5 12 39.5 12 L41 12" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="6.5" width="3" height="5" rx="0.8"/><rect x="8" y="4.5" width="3" height="5" rx="0.8"/><rect x="14" y="3" width="3" height="5" rx="0.8"/><rect x="20" y="5.5" width="3" height="5" rx="0.8"/><rect x="26" y="8.5" width="3" height="5" rx="0.8"/><rect x="32" y="9.5" width="3" height="5" rx="0.8"/><rect x="38" y="7" width="3" height="5" rx="0.8"/></svg>
-              <span>reelabs-mcp</span>
-              <span class="sep">/</span>
-              <span class="current">Cut podcast clip for TikTok</span>
-            </span>
-          </div>
           <div class="session-body">
             <div class="session-row">
               <div class="session-avatar">W</div>
               <div class="session-bubble">
                 <div class="session-user-msg">
-                  Grab the best 30 seconds from <code class="code-inline">podcast-ep12.mp4</code> and cut it vertical with karaoke captions.
+                  Create a few podcast clips in my style.
                 </div>
               </div>
             </div>
@@ -86,16 +74,40 @@
               </div>
               <div class="session-bubble">
                 <div class="author">Claude</div>
-                <p>
-                  Probing the source first, then transcribing so I can pick the clip from the utterance timestamps.
-                </p>
-                <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px">
-                  <span class="session-tool-call"><span class="check">✓</span> reelabs_probe</span>
-                  <span class="session-tool-call"><span class="check">✓</span> reelabs_transcribe · 347 words</span>
+                <div class="session-status">
+                  <div class="session-status-item"><span class="session-status-dot"></span>Transcribing<span class="dots">...</span></div>
+                  <div class="session-status-item"><span class="session-status-dot"></span>Deploying Visual Analysis Agent<span class="dots">...</span></div>
+                  <div class="session-status-item"><span class="session-status-dot"></span>Understanding Story<span class="dots">...</span></div>
                 </div>
-                <p style="margin-top: 14px">
-                  Found a clean highlight at <code class="code-inline">04:12 – 04:43</code>. Applying the <code class="code-inline">podcast_clip</code> kit — 9:16, big yellow karaoke captions, subtle push-in. Ready to render on your go.
+                <p style="margin-top: 16px">
+                  Hey, these two clips look the best, am I good to render?
                 </p>
+              </div>
+            </div>
+
+            <div class="session-row">
+              <div class="session-avatar">W</div>
+              <div class="session-bubble">
+                <div class="session-user-msg">Sounds good.</div>
+              </div>
+            </div>
+
+            <div class="session-row">
+              <div class="session-avatar agent">
+                <svg class="brand-mark" viewBox="0 0 42 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M1 6.5 L3.5 6.5 C5.5 6.5 7.5 4.5 9.5 4.5 C11.5 4.5 13.5 3 15.5 3 C17.5 3 19.5 5.5 21.5 5.5 C23.5 5.5 25.5 8.5 27.5 8.5 C29.5 8.5 31.5 9.5 33.5 9.5 C35.5 9.5 37.5 7 39.5 7 L41 7" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 11.5 L3.5 11.5 C5.5 11.5 7.5 9.5 9.5 9.5 C11.5 9.5 13.5 8 15.5 8 C17.5 8 19.5 10.5 21.5 10.5 C23.5 10.5 25.5 13.5 27.5 13.5 C29.5 13.5 31.5 14.5 33.5 14.5 C35.5 14.5 37.5 12 39.5 12 L41 12" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/><rect x="2" y="6.5" width="3" height="5" rx="0.8"/><rect x="8" y="4.5" width="3" height="5" rx="0.8"/><rect x="14" y="3" width="3" height="5" rx="0.8"/><rect x="20" y="5.5" width="3" height="5" rx="0.8"/><rect x="26" y="8.5" width="3" height="5" rx="0.8"/><rect x="32" y="9.5" width="3" height="5" rx="0.8"/><rect x="38" y="7" width="3" height="5" rx="0.8"/></svg>
+              </div>
+              <div class="session-bubble">
+                <div class="author">Claude</div>
+                <div class="session-clips">
+                  <span class="session-clip">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M7 6.5l3 1.5-3 1.5v-3z" fill="currentColor" stroke="none"/></svg>
+                    podcast-clip-01.mp4
+                  </span>
+                  <span class="session-clip">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M7 6.5l3 1.5-3 1.5v-3z" fill="currentColor" stroke="none"/></svg>
+                    podcast-clip-02.mp4
+                  </span>
+                </div>
               </div>
             </div>
           </div>

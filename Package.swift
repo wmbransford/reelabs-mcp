@@ -24,7 +24,10 @@ let package = Package(
             ],
             path: "Sources/ReelabsMCPLib",
             resources: [
-                .copy("Resources/kits"),
+                .copy("Resources/CLAUDE.md"),
+                .copy("Resources/flows"),
+                .copy("Resources/presets"),
+                .copy("Resources/reference"),
             ]
         ),
         .executableTarget(

@@ -60,11 +60,11 @@ let renderStore = RenderStore(paths: paths)
 let presetStore = PresetStore(paths: paths)
 let analysisStore = AnalysisStore(paths: paths)
 
-// Seed default presets on first run
-try DefaultPresets.seed(store: presetStore)
-
-// Seed bundled kits — built-ins are always upserted, user-created kits are left alone
-try DefaultKits.seed(kitsDir: paths.kitsDir)
+// Seed bundled resources — built-ins are always upserted, user-created files are left alone
+try DefaultBundledPresets.seed(presetsDir: paths.presetsDir)
+try DefaultFlows.seed(flowsDir: paths.flowsDir)
+try DefaultReference.seed(referenceDir: paths.referenceDir)
+try DefaultClaudeMd.seed(dataRoot: dataRoot)
 
 // MARK: - Startup Validation
 
@@ -96,6 +96,7 @@ func configureServer(_ server: Server) async {
             AssetTool.tool,
             PresetTool.tool,
             SilenceRemoveTool.tool,
+            SpeakerDetectTool.tool,
             AnalyzeTool.tool,
             RerenderTool.tool,
             GraphicTool.tool,
@@ -147,6 +148,9 @@ func configureServer(_ server: Server) async {
 
         case "reelabs_silence_remove":
             return SilenceRemoveTool.handle(arguments: params.arguments, store: transcriptStore)
+
+        case "reelabs_speaker_detect":
+            return SpeakerDetectTool.handle(arguments: params.arguments, store: transcriptStore)
 
         case "reelabs_analyze":
             return await AnalyzeTool.handle(

@@ -7,6 +7,7 @@ package struct RenderSpec: Codable, Sendable {
     let segments: [SegmentSpec]
     let captions: CaptionConfig?
     let audio: AudioConfig?
+    let framing: FramingConfig?
     let quality: QualityConfig?
     let overlays: [Overlay]?
     let aspectRatio: AspectRatio?
@@ -17,6 +18,7 @@ package struct RenderSpec: Codable, Sendable {
     package init(
         sources: [Source], segments: [SegmentSpec],
         captions: CaptionConfig?, audio: AudioConfig?,
+        framing: FramingConfig? = nil,
         quality: QualityConfig?, overlays: [Overlay]?,
         aspectRatio: AspectRatio?, resolution: Resolution?,
         fps: Double?, outputPath: String
@@ -25,6 +27,7 @@ package struct RenderSpec: Codable, Sendable {
         self.segments = segments
         self.captions = captions
         self.audio = audio
+        self.framing = framing
         self.quality = quality
         self.overlays = overlays
         self.aspectRatio = aspectRatio
@@ -38,9 +41,22 @@ package struct RenderSpec: Codable, Sendable {
         RenderSpec(
             sources: sources, segments: segments,
             captions: captions, audio: audio,
+            framing: framing,
             quality: quality, overlays: overlays,
             aspectRatio: aspectRatio, resolution: resolution,
             fps: fps, outputPath: path
+        )
+    }
+
+    /// Return a copy with new segments, captions, and audio — used by preset resolution in RenderTool.
+    func withResolvedConfigs(segments: [SegmentSpec], captions: CaptionConfig?, audio: AudioConfig?, overlays: [Overlay]?) -> RenderSpec {
+        RenderSpec(
+            sources: sources, segments: segments,
+            captions: captions, audio: audio,
+            framing: framing,
+            quality: quality, overlays: overlays,
+            aspectRatio: aspectRatio, resolution: resolution,
+            fps: fps, outputPath: outputPath
         )
     }
 
@@ -153,8 +169,17 @@ package struct TransformSpec: Codable, Sendable {
 // MARK: - Transition
 
 package struct Transition: Codable, Sendable {
-    let type: TransitionType
-    let duration: Double
+    /// If set, resolved in RenderTool from `presets/transitions/{preset}.md`.
+    /// After resolution, `type` and `duration` are populated; callers should unwrap with `??` as a safety net.
+    let preset: String?
+    let type: TransitionType?
+    let duration: Double?
+
+    package init(preset: String? = nil, type: TransitionType? = nil, duration: Double? = nil) {
+        self.preset = preset
+        self.type = type
+        self.duration = duration
+    }
 
     package enum TransitionType: String, Codable, Sendable {
         case crossfade
@@ -181,11 +206,76 @@ package struct CaptionConfig: Codable, Sendable {
 // MARK: - Audio Config
 
 package struct AudioConfig: Codable, Sendable {
+    /// If set, resolved in RenderTool from `presets/audio/{preset}.md`.
+    let preset: String?
     let musicPath: String?
     let musicVolume: Double?
     let normalizeAudio: Bool?
     let duckingEnabled: Bool?
     let duckingLevel: Double?
+
+    package init(
+        preset: String? = nil,
+        musicPath: String? = nil,
+        musicVolume: Double? = nil,
+        normalizeAudio: Bool? = nil,
+        duckingEnabled: Bool? = nil,
+        duckingLevel: Double? = nil
+    ) {
+        self.preset = preset
+        self.musicPath = musicPath
+        self.musicVolume = musicVolume
+        self.normalizeAudio = normalizeAudio
+        self.duckingEnabled = duckingEnabled
+        self.duckingLevel = duckingLevel
+    }
+}
+
+// MARK: - Framing Config
+
+/// Spec-level framing — applied to every segment that doesn't already have its own `keyframes` or `transform`.
+/// Decoded from `presets/framing/{preset}.md` and compiled into segment-level keyframes in RenderTool.
+package struct FramingConfig: Codable, Sendable {
+    let preset: String?
+    let kind: String?            // "keyframes" or "static"
+    let startScale: Double?
+    let endScale: Double?
+    let startPanX: Double?
+    let startPanY: Double?
+    let endPanX: Double?
+    let endPanY: Double?
+    let scale: Double?           // static mode
+    let panX: Double?
+    let panY: Double?
+    let alternation: Bool?       // odd/even segments flip start<->end (e.g. engaging)
+
+    package init(
+        preset: String? = nil,
+        kind: String? = nil,
+        startScale: Double? = nil,
+        endScale: Double? = nil,
+        startPanX: Double? = nil,
+        startPanY: Double? = nil,
+        endPanX: Double? = nil,
+        endPanY: Double? = nil,
+        scale: Double? = nil,
+        panX: Double? = nil,
+        panY: Double? = nil,
+        alternation: Bool? = nil
+    ) {
+        self.preset = preset
+        self.kind = kind
+        self.startScale = startScale
+        self.endScale = endScale
+        self.startPanX = startPanX
+        self.startPanY = startPanY
+        self.endPanX = endPanX
+        self.endPanY = endPanY
+        self.scale = scale
+        self.panX = panX
+        self.panY = panY
+        self.alternation = alternation
+    }
 }
 
 // MARK: - Quality Config

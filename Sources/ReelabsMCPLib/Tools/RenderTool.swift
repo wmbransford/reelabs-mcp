@@ -40,23 +40,92 @@ package enum RenderTool {
             let specData = try JSONSerialization.data(withJSONObject: specValue.toJSONObject())
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let spec = try decoder.decode(RenderSpec.self, from: specData)
+            let inputSpec = try decoder.decode(RenderSpec.self, from: specData)
 
             // Resolve the project for this render
             let projectSlug: String
             if let explicit = arguments?["project"]?.stringValue {
                 projectSlug = explicit
-            } else if let firstSource = spec.sources.first {
+            } else if let firstSource = inputSpec.sources.first {
                 projectSlug = DataPaths.deriveProjectSlug(fromSourcePath: firstSource.path)
             } else {
                 return .init(content: [.text(text: "No project arg and no sources to derive one from.", annotations: nil, _meta: nil)], isError: true)
             }
             _ = try projectStore.createWithSlug(slug: projectSlug)
 
-            // Encode spec for storage
+            // Encode the original (unresolved) spec for storage so rerenders re-pick up preset values.
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-            let specJson = String(data: try encoder.encode(spec), encoding: .utf8) ?? "{}"
+            let specJson = String(data: try encoder.encode(inputSpec), encoding: .utf8) ?? "{}"
+
+            // --- Preset resolution ---
+            // Merge preset values into each config; inline overrides from inputSpec win over preset defaults.
+            // `spec` below is the resolved form and is used for everything downstream.
+
+            var resolvedCaptionConfig = inputSpec.captions
+            if let presetName = inputSpec.captions?.preset {
+                guard let presetConfig = try presetStore.get(category: "captions", name: presetName, as: CaptionConfig.self) else {
+                    return .init(content: [.text(text: "Caption error: preset '\(presetName)' not found in presets/captions/.", annotations: nil, _meta: nil)], isError: true)
+                }
+                resolvedCaptionConfig = mergeCaptionConfig(base: presetConfig, override: inputSpec.captions)
+            }
+
+            var resolvedAudioConfig = inputSpec.audio
+            if let presetName = inputSpec.audio?.preset {
+                guard let presetConfig = try presetStore.get(category: "audio", name: presetName, as: AudioConfig.self) else {
+                    return .init(content: [.text(text: "Audio error: preset '\(presetName)' not found in presets/audio/.", annotations: nil, _meta: nil)], isError: true)
+                }
+                resolvedAudioConfig = mergeAudioConfig(base: presetConfig, override: inputSpec.audio)
+            }
+
+            var resolvedFramingConfig = inputSpec.framing
+            if let presetName = inputSpec.framing?.preset {
+                guard let presetConfig = try presetStore.get(category: "framing", name: presetName, as: FramingConfig.self) else {
+                    return .init(content: [.text(text: "Framing error: preset '\(presetName)' not found in presets/framing/.", annotations: nil, _meta: nil)], isError: true)
+                }
+                resolvedFramingConfig = mergeFramingConfig(base: presetConfig, override: inputSpec.framing)
+            }
+
+            let resolvedSegments: [SegmentSpec] = try inputSpec.segments.enumerated().map { (idx, seg) -> SegmentSpec in
+                var resolvedTransition = seg.transition
+                if let transitionPresetName = seg.transition?.preset {
+                    guard let presetTransition = try presetStore.get(category: "transitions", name: transitionPresetName, as: Transition.self) else {
+                        throw NSError(
+                            domain: "RenderTool", code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "Transition error: preset '\(transitionPresetName)' not found in presets/transitions/."]
+                        )
+                    }
+                    resolvedTransition = mergeTransition(base: presetTransition, override: seg.transition)
+                }
+
+                var resolvedTransform = seg.transform
+                var resolvedKeyframes = seg.keyframes
+                if let framing = resolvedFramingConfig, seg.transform == nil, seg.keyframes == nil {
+                    let segDuration = (seg.end - seg.start) / (seg.speed ?? 1.0)
+                    let compiled = compileFramingForSegment(framing, segmentIndex: idx, segmentDuration: segDuration)
+                    resolvedTransform = compiled.transform
+                    resolvedKeyframes = compiled.keyframes
+                }
+
+                return SegmentSpec(
+                    sourceId: seg.sourceId,
+                    start: seg.start,
+                    end: seg.end,
+                    speed: seg.speed,
+                    transform: resolvedTransform,
+                    keyframes: resolvedKeyframes,
+                    transition: resolvedTransition,
+                    volume: seg.volume
+                )
+            }
+
+            let spec = inputSpec.withResolvedConfigs(
+                segments: resolvedSegments,
+                captions: resolvedCaptionConfig,
+                audio: resolvedAudioConfig,
+                overlays: inputSpec.overlays
+            )
+            // --- End preset resolution ---
 
             // Determine caption mode: per-source, legacy single-transcript, or error
             let hasPerSourceTranscripts = spec.sources.contains { $0.transcriptId != nil }
@@ -121,19 +190,6 @@ package enum RenderTool {
                     fullText: fullText,
                     durationSeconds: record?.durationSeconds ?? 0
                 )
-            }
-
-            // Resolve caption preset
-            var resolvedCaptionConfig = spec.captions
-            if let presetName = spec.captions?.preset {
-                guard let preset = try presetStore.get(name: presetName) else {
-                    return .init(content: [.text(text: "Caption error: preset '\(presetName)' not found. Available: tiktok, subtitle, minimal, bold_center, william.", annotations: nil, _meta: nil)], isError: true)
-                }
-                guard let presetData = preset.configJson.data(using: .utf8) else {
-                    return .init(content: [.text(text: "Caption error: preset '\(presetName)' contains invalid encoding", annotations: nil, _meta: nil)], isError: true)
-                }
-                let presetConfig = try JSONDecoder().decode(CaptionConfig.self, from: presetData)
-                resolvedCaptionConfig = mergeCaptionConfig(base: presetConfig, override: spec.captions)
             }
 
             if spec.segments.isEmpty {
@@ -332,8 +388,8 @@ func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) -> Transcr
         let speed = seg.speed ?? 1.0
         let duration = (seg.end - seg.start) / speed
 
-        if index > 0, let transition = seg.transition, transition.type == .crossfade {
-            let clamped = min(transition.duration, duration)
+        if index > 0, let transition = seg.transition, transition.type == .crossfade, let transitionDuration = transition.duration {
+            let clamped = min(transitionDuration, duration)
             compositionTime -= clamped
         }
 
@@ -386,8 +442,8 @@ func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], s
         let speed = seg.speed ?? 1.0
         let segDuration = (seg.end - seg.start) / speed
 
-        if segIdx > 0, let transition = seg.transition, transition.type == .crossfade {
-            let clamped = min(transition.duration, segDuration)
+        if segIdx > 0, let transition = seg.transition, transition.type == .crossfade, let transitionDuration = transition.duration {
+            let clamped = min(transitionDuration, segDuration)
             compositionTime -= clamped
         }
 
@@ -478,4 +534,78 @@ private func mergeCaptionConfig(base: CaptionConfig, override: CaptionConfig?) -
         wordsPerGroup: o.wordsPerGroup ?? base.wordsPerGroup,
         punctuation: o.punctuation ?? base.punctuation
     )
+}
+
+private func mergeAudioConfig(base: AudioConfig, override: AudioConfig?) -> AudioConfig {
+    guard let o = override else { return base }
+    return AudioConfig(
+        preset: o.preset ?? base.preset,
+        musicPath: o.musicPath ?? base.musicPath,
+        musicVolume: o.musicVolume ?? base.musicVolume,
+        normalizeAudio: o.normalizeAudio ?? base.normalizeAudio,
+        duckingEnabled: o.duckingEnabled ?? base.duckingEnabled,
+        duckingLevel: o.duckingLevel ?? base.duckingLevel
+    )
+}
+
+private func mergeFramingConfig(base: FramingConfig, override: FramingConfig?) -> FramingConfig {
+    guard let o = override else { return base }
+    return FramingConfig(
+        preset: o.preset ?? base.preset,
+        kind: o.kind ?? base.kind,
+        startScale: o.startScale ?? base.startScale,
+        endScale: o.endScale ?? base.endScale,
+        startPanX: o.startPanX ?? base.startPanX,
+        startPanY: o.startPanY ?? base.startPanY,
+        endPanX: o.endPanX ?? base.endPanX,
+        endPanY: o.endPanY ?? base.endPanY,
+        scale: o.scale ?? base.scale,
+        panX: o.panX ?? base.panX,
+        panY: o.panY ?? base.panY,
+        alternation: o.alternation ?? base.alternation
+    )
+}
+
+private func mergeTransition(base: Transition, override: Transition?) -> Transition {
+    guard let o = override else { return base }
+    return Transition(
+        preset: o.preset ?? base.preset,
+        type: o.type ?? base.type,
+        duration: o.duration ?? base.duration
+    )
+}
+
+/// Compile a FramingConfig into per-segment framing (transform for static, keyframes for animated).
+/// Returns nil values when the framing preset doesn't require that representation.
+private func compileFramingForSegment(
+    _ framing: FramingConfig,
+    segmentIndex: Int,
+    segmentDuration: Double
+) -> (transform: TransformSpec?, keyframes: [Keyframe]?) {
+    let kind = framing.kind ?? "keyframes"
+
+    if kind == "static" {
+        let transform = TransformSpec(
+            scale: framing.scale,
+            panX: framing.panX,
+            panY: framing.panY
+        )
+        return (transform, nil)
+    }
+
+    // Animated keyframes. If alternation is on, odd segments swap start/end endpoints.
+    let alternated = (framing.alternation ?? false) && (segmentIndex % 2 == 1)
+
+    let startScale = alternated ? (framing.endScale ?? 1.0) : (framing.startScale ?? 1.0)
+    let endScale = alternated ? (framing.startScale ?? 1.0) : (framing.endScale ?? 1.0)
+    let startPanX = alternated ? (framing.endPanX ?? 0) : (framing.startPanX ?? 0)
+    let startPanY = alternated ? (framing.endPanY ?? 0) : (framing.startPanY ?? 0)
+    let endPanX = alternated ? (framing.startPanX ?? 0) : (framing.endPanX ?? 0)
+    let endPanY = alternated ? (framing.startPanY ?? 0) : (framing.endPanY ?? 0)
+
+    let keyframes = [
+        Keyframe(time: 0, scale: startScale, panX: startPanX, panY: startPanY),
+        Keyframe(time: segmentDuration, scale: endScale, panX: endPanX, panY: endPanY)
+    ]
+    return (nil, keyframes)
 }

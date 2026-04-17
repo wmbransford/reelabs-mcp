@@ -12,8 +12,10 @@ Extracted Frames/
 .obsidian/
 data/projects/
 data/presets/
-data/kits/
+data/flows/
+data/reference/
 data/Media/
+data/CLAUDE.md
 
 # Firebase (proxy backend — deployment/)
 deployment/functions/node_modules/

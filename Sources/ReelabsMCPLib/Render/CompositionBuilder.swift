@@ -142,8 +142,8 @@ final class CompositionBuilder: Sendable {
 
             // Incoming crossfade: pull insertion time back to create overlap
             let transitionDur: CMTime
-            if index > 0, let transition = segment.transition, transition.type == .crossfade {
-                let clamped = min(transition.duration, CMTimeGetSeconds(outputDuration))
+            if index > 0, let transition = segment.transition, transition.type == .crossfade, let transitionDuration = transition.duration {
+                let clamped = min(transitionDuration, CMTimeGetSeconds(outputDuration))
                 transitionDur = CMTime(seconds: clamped, preferredTimescale: 600)
                 insertionTime = CMTimeSubtract(insertionTime, transitionDur)
             } else {

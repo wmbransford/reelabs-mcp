@@ -91,13 +91,13 @@ package enum ValidateTool {
                         issues.append("Segment \(i): speed \(speed)x out of range (0.25-4.0)")
                     }
                 }
-                if let transition = segment.transition {
-                    if transition.duration <= 0 {
+                if let transition = segment.transition, let transitionDuration = transition.duration {
+                    if transitionDuration <= 0 {
                         issues.append("Segment \(i): transition duration must be positive")
                     }
                     let segDuration = segment.end - segment.start
-                    if transition.duration > segDuration / 2 {
-                        issues.append("Segment \(i): transition duration (\(transition.duration)s) exceeds half segment duration")
+                    if transitionDuration > segDuration / 2 {
+                        issues.append("Segment \(i): transition duration (\(transitionDuration)s) exceeds half segment duration")
                     }
                 }
             }
