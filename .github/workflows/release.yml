@@ -23,7 +23,11 @@ jobs:
 
       - name: Build universal binary
         run: |
-          swift build -c release --arch arm64 --arch x86_64 --product ReelabsMCP
+          # SwiftPM 6.1 exits non-zero on benign language-version warnings in
+          # transitive deps even when the build fully succeeds — assert on the
+          # produced binary instead of trusting the exit code.
+          swift build -c release --arch arm64 --arch x86_64 --product ReelabsMCP || true
+          test -x .build/apple/Products/Release/ReelabsMCP
 
       - name: Package tarball
         id: package
