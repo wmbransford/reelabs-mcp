@@ -1,5 +1,5 @@
 {
-  "originHash" : "0d488a6f5edb2ede951a47a6d5fd85b9fa6fbec83fac75c20e3b21b6acfbbe67",
+  "originHash" : "c0d5875cd555d4db19d6c69b1cc306ca18949bd24aa57a790df50f4a3c086483",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -8,15 +8,6 @@
       "state" : {
         "revision" : "a3a85a85214caf642abaa96ae664e4c772a59f6e",
         "version" : "1.4.1"
-      }
-    },
-    {
-      "identity" : "grdb.swift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/groue/GRDB.swift.git",
-      "state" : {
-        "revision" : "36e30a6f1ef10e4194f6af0cff90888526f0c115",
-        "version" : "7.10.0"
       }
     },
     {
@@ -71,6 +62,15 @@
       "state" : {
         "revision" : "7c6ad0fc39d0763e0b699210e4124afd5041c5df",
         "version" : "1.6.4"
+      }
+    },
+    {
+      "identity" : "yams",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/jpsim/Yams.git",
+      "state" : {
+        "revision" : "3d6871d5b4a5cd519adf233fbb576e0a2af71c17",
+        "version" : "5.4.0"
       }
     }
   ],

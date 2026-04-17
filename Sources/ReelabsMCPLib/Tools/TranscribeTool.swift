@@ -5,7 +5,7 @@ import MCP
 package enum TranscribeTool {
     package static let tool = Tool(
         name: "reelabs_transcribe",
-        description: "Transcribe a video/audio file using Google Cloud Speech-to-Text (Chirp). Returns word-level timestamps. Stores result in database for caption rendering and search. All audio uses the sync API — clips over 55s are chunked and transcribed in parallel for accurate timestamps.",
+        description: "Transcribe a video/audio file using Google Cloud Speech-to-Text (Chirp). Returns word-level timestamps grouped by silence gaps. Writes transcript.md + words.json into the project folder. If `project` is omitted, derives one from the source file's parent directory.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
@@ -13,9 +13,9 @@ package enum TranscribeTool {
                     "type": .string("string"),
                     "description": .string("Absolute path to video or audio file")
                 ]),
-                "asset_id": .object([
-                    "type": .string("integer"),
-                    "description": .string("Optional asset ID to link transcript to")
+                "project": .object([
+                    "type": .string("string"),
+                    "description": .string("Optional project slug. If omitted, derived from the source file's parent directory.")
                 ]),
                 "language": .object([
                     "type": .string("string"),
@@ -26,7 +26,12 @@ package enum TranscribeTool {
         ])
     )
 
-    package static func handle(arguments: [String: Value]?, transcriptRepo: TranscriptRepository, config: ServerConfig) async -> CallTool.Result {
+    package static func handle(
+        arguments: [String: Value]?,
+        transcriptStore: TranscriptStore,
+        projectStore: ProjectStore,
+        config: ServerConfig
+    ) async -> CallTool.Result {
         guard let path = arguments?["path"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: path", annotations: nil, _meta: nil)], isError: true)
         }
@@ -35,11 +40,21 @@ package enum TranscribeTool {
             return .init(content: [.text(text: "File not found: \(path)", annotations: nil, _meta: nil)], isError: true)
         }
 
-        let assetId = extractInt64(arguments?["asset_id"])
         let language = arguments?["language"]?.stringValue ?? "en-US"
 
+        // Resolve project: explicit arg or derive from parent dir
+        let projectSlug: String
+        if let explicit = arguments?["project"]?.stringValue {
+            projectSlug = explicit
+        } else {
+            projectSlug = DataPaths.deriveProjectSlug(fromSourcePath: path)
+        }
+        let sourceSlug = DataPaths.deriveSourceSlug(fromSourcePath: path)
+
         do {
-            // Get duration to determine sync vs batch
+            // Ensure project exists
+            _ = try projectStore.createWithSlug(slug: projectSlug)
+
             let videoURL = URL(fileURLWithPath: path)
             let asset = AVURLAsset(url: videoURL)
             let duration = try await asset.load(.duration)
@@ -49,47 +64,86 @@ package enum TranscribeTool {
             let flacURL = try await AudioExtractor.extractAudio(from: videoURL)
             defer { try? FileManager.default.removeItem(at: flacURL) }
 
-            // Transcribe with Chirp
-            guard let saPath = config.serviceAccountPath else {
-                return .init(content: [.text(text: "Transcription requires service_account_path in config.json", annotations: nil, _meta: nil)], isError: true)
+            // Transcribe via the ReeLabs proxy (Cloud Functions → Chirp).
+            let storedToken = try? TokenKeychain.read()
+            guard let apiToken = storedToken ?? nil, !apiToken.isEmpty else {
+                return .init(content: [.text(
+                    text: "Not signed in. Tell the user to run `reelabs-mcp sign-in` in their terminal, then retry.",
+                    annotations: nil, _meta: nil
+                )], isError: true)
             }
-            let client = try ChirpClient(
-                serviceAccountPath: saPath,
-                location: config.chirpLocation,
-                model: config.chirpModel
-            )
-            let transcriptData = try await client.transcribe(
-                flacURL: flacURL,
-                durationSeconds: durationSeconds,
-                language: language
-            )
+            let client = ChirpClient(proxyURL: ProxyEndpoints.transcribe, apiToken: apiToken)
+            let transcriptData: TranscriptData
+            do {
+                transcriptData = try await client.transcribe(
+                    flacURL: flacURL,
+                    durationSeconds: durationSeconds,
+                    language: language
+                )
+            } catch ChirpError.unauthenticated {
+                return .init(content: [.text(
+                    text: "Sign-in has expired. Tell the user to run `reelabs-mcp sign-in` again.",
+                    annotations: nil, _meta: nil
+                )], isError: true)
+            } catch ChirpError.quotaExceeded(let body) {
+                return .init(content: [.text(
+                    text: "Free-tier quota reached. Upgrade at https://reelabs.ai to continue. (\(body))",
+                    annotations: nil, _meta: nil
+                )], isError: true)
+            }
 
             // Build compact transcript for agent context
             let compactArray = TranscriptCompactor.compact(words: transcriptData.words)
-            let compactJsonString = TranscriptCompactor.compactJsonString(words: transcriptData.words)
 
-            // Store in database — transcript metadata + words as structured rows
-            var transcript = Transcript(
+            // Build WordEntry sidecar payload
+            let wordEntries: [WordEntry] = transcriptData.words.map { w in
+                WordEntry(
+                    word: w.word,
+                    start: w.startTime,
+                    end: w.endTime,
+                    confidence: w.confidence
+                )
+            }
+
+            let mode = durationSeconds <= 55 ? "sync" : "chunked-sync (\(Int(ceil(durationSeconds / 50))) chunks)"
+            let record = TranscriptRecord(
+                slug: sourceSlug,
                 sourcePath: path,
-                fullText: transcriptData.fullText,
-                compactJson: compactJsonString,
                 durationSeconds: transcriptData.durationSeconds,
                 wordCount: transcriptData.words.count,
-                assetId: assetId
+                language: language,
+                mode: mode
             )
-            transcript = try transcriptRepo.createWithWords(transcript, words: transcriptData.words)
 
-            // Return compact transcript — utterances grouped by silence gaps
-            let mode = durationSeconds <= 55 ? "sync" : "chunked-sync (\(Int(ceil(durationSeconds / 50))) chunks)"
+            _ = try transcriptStore.save(
+                project: projectSlug,
+                source: sourceSlug,
+                record: record,
+                compactEntries: compactArray,
+                words: wordEntries
+            )
+
+            // Run the verification flagger over word-level timestamps so the agent can
+            // review misheard words and probable retakes before burning captions.
+            let flags = TranscriptFlagger.flag(words: wordEntries)
+
+            // Return the markdown utterance view inline — same shape written to disk.
+            // Markdown is roughly half the size of the JSON array form and easier to scan.
+            let transcriptMarkdown = TranscriptStore.formatBody(record: record, entries: compactArray)
+            let transcriptId = "\(projectSlug)/\(sourceSlug)"
             let response: [String: Any] = [
-                "transcript_id": transcript.id ?? 0,
+                "transcript_id": transcriptId,
+                "project": projectSlug,
+                "source": sourceSlug,
                 "word_count": transcriptData.words.count,
                 "duration_seconds": round(transcriptData.durationSeconds * 100) / 100,
-                "transcript": compactArray,
+                "transcript_markdown": transcriptMarkdown,
                 "source_path": path,
-                "mode": mode
+                "mode": mode,
+                "flagged_words": flags.flaggedWords,
+                "flagged_utterances": flags.flaggedUtterances
             ]
-            let responseData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
+            let responseData = try safeJSONData(from: response)
             let text = String(data: responseData, encoding: .utf8) ?? "{}"
             return .init(content: [.text(text: text, annotations: nil, _meta: nil)], isError: false)
         } catch {

@@ -1,8 +1,30 @@
 import Foundation
 import Logging
 import MCP
-import GRDB
 import ReelabsMCPLib
+
+// MARK: - Subcommands (sign-in, sign-out, whoami)
+
+if CommandLine.arguments.count >= 2 {
+    let sub = CommandLine.arguments[1]
+    switch sub {
+    case "sign-in":
+        await runSignIn()
+        exit(0)
+    case "sign-out":
+        await runSignOut()
+        exit(0)
+    case "whoami":
+        await runWhoAmI()
+        exit(0)
+    case "--help", "-h", "help":
+        printUsage()
+        exit(0)
+    default:
+        // Fall through — unknown flags like --port are handled below.
+        break
+    }
+}
 
 // --- PID file: kill any stale server before starting ---
 let pidDir = try FileManager.default.url(
@@ -18,7 +40,7 @@ if let oldPidString = try? String(contentsOf: pidFile, encoding: .utf8).trimming
    let oldPid = Int32(oldPidString),
    oldPid != ProcessInfo.processInfo.processIdentifier {
     kill(oldPid, SIGTERM)
-    usleep(100_000) // 100ms for graceful shutdown
+    usleep(100_000)
 }
 try "\(ProcessInfo.processInfo.processIdentifier)".write(to: pidFile, atomically: true, encoding: .utf8)
 
@@ -26,54 +48,50 @@ try "\(ProcessInfo.processInfo.processIdentifier)".write(to: pidFile, atomically
 let loadResult = ServerConfig.load()
 let config = loadResult.config
 
-// Initialize database
-let db = try DatabaseManager(path: config.databasePath)
+// Initialize markdown data store
+let dataRoot = config.resolveDataRoot()
+try FileManager.default.createDirectory(at: dataRoot, withIntermediateDirectories: true)
+let paths = DataPaths(root: dataRoot)
 
-// Create repositories
-let projectRepo = ProjectRepository(dbPool: db.dbPool)
-let assetRepo = AssetRepository(dbPool: db.dbPool)
-let transcriptRepo = TranscriptRepository(dbPool: db.dbPool)
-let renderRepo = RenderRepository(dbPool: db.dbPool)
-let presetRepo = PresetRepository(dbPool: db.dbPool)
-let analysisRepo = VisualAnalysisRepository(dbPool: db.dbPool)
+let projectStore = ProjectStore(paths: paths)
+let assetStore = AssetStore(paths: paths)
+let transcriptStore = TranscriptStore(paths: paths)
+let renderStore = RenderStore(paths: paths)
+let presetStore = PresetStore(paths: paths)
+let analysisStore = AnalysisStore(paths: paths)
 
 // Seed default presets on first run
-try DefaultPresets.seed(repo: presetRepo)
+try DefaultPresets.seed(store: presetStore)
+
+// Seed bundled kits — built-ins are always upserted, user-created kits are left alone
+try DefaultKits.seed(kitsDir: paths.kitsDir)
 
 // MARK: - Startup Validation
 
 do {
     let startupLogger = Logger(label: "reelabs.startup")
-    startupLogger.info("ReeLabs MCP v2.0.0")
+    startupLogger.info("ReeLabs MCP v2.0.0 — markdown data store")
     startupLogger.info("Config: \(loadResult.configSource)")
+    startupLogger.info("Data root: \(dataRoot.path)")
 
-    if let saPath = config.serviceAccountPath {
-        let readable = FileManager.default.isReadableFile(atPath: saPath)
-        startupLogger.info("Service account: \(saPath) (readable: \(readable))")
+    let tokenPresent = ((try? TokenKeychain.read()) ?? nil)?.isEmpty == false
+    if tokenPresent {
+        startupLogger.info("API token: present in keychain")
     } else {
-        startupLogger.warning("Service account: not configured (transcription disabled)")
+        startupLogger.warning("API token: not set (transcription disabled — run `reelabs-mcp sign-in`)")
     }
-
-    let dbPath: String
-    if let configDbPath = config.databasePath {
-        dbPath = configDbPath
-    } else {
-        dbPath = (try? DatabaseManager.databaseURL().path) ?? "<unknown>"
-    }
-    startupLogger.info("Database: \(dbPath)")
 }
 
 // MARK: - Server Configuration
 
-/// Registers all tools on a Server instance.
 func configureServer(_ server: Server) async {
     await server.withMethodHandler(ListTools.self) { _ in
         .init(tools: [
             ProbeTool.tool,
             TranscribeTool.tool,
+            TranscriptTool.tool,
             RenderTool.tool,
             ValidateTool.tool,
-            SearchTool.tool,
             ProjectTool.tool,
             AssetTool.tool,
             PresetTool.tool,
@@ -82,6 +100,7 @@ func configureServer(_ server: Server) async {
             RerenderTool.tool,
             GraphicTool.tool,
             LayoutTool.tool,
+            ExtractAudioTool.tool,
         ])
     }
 
@@ -91,40 +110,69 @@ func configureServer(_ server: Server) async {
             return await ProbeTool.handle(arguments: params.arguments)
 
         case "reelabs_transcribe":
-            return await TranscribeTool.handle(arguments: params.arguments, transcriptRepo: transcriptRepo, config: config)
+            return await TranscribeTool.handle(
+                arguments: params.arguments,
+                transcriptStore: transcriptStore,
+                projectStore: projectStore,
+                config: config
+            )
+
+        case "reelabs_transcript":
+            return TranscriptTool.handle(arguments: params.arguments, store: transcriptStore)
 
         case "reelabs_render":
-            return await RenderTool.handle(arguments: params.arguments, renderRepo: renderRepo, transcriptRepo: transcriptRepo, presetRepo: presetRepo)
+            return await RenderTool.handle(
+                arguments: params.arguments,
+                renderStore: renderStore,
+                transcriptStore: transcriptStore,
+                projectStore: projectStore,
+                presetStore: presetStore
+            )
 
         case "reelabs_validate":
-            return await ValidateTool.handle(arguments: params.arguments, transcriptRepo: transcriptRepo)
-
-        case "reelabs_search":
-            return SearchTool.handle(arguments: params.arguments, dbPool: db.dbPool)
+            return await ValidateTool.handle(arguments: params.arguments, transcriptStore: transcriptStore)
 
         case "reelabs_project":
-            return ProjectTool.handle(arguments: params.arguments, repo: projectRepo)
+            return ProjectTool.handle(arguments: params.arguments, store: projectStore)
 
         case "reelabs_asset":
-            return await AssetTool.handle(arguments: params.arguments, assetRepo: assetRepo)
+            return await AssetTool.handle(
+                arguments: params.arguments,
+                assetStore: assetStore,
+                projectStore: projectStore
+            )
 
         case "reelabs_preset":
-            return PresetTool.handle(arguments: params.arguments, presetRepo: presetRepo)
+            return PresetTool.handle(arguments: params.arguments, store: presetStore)
 
         case "reelabs_silence_remove":
-            return SilenceRemoveTool.handle(arguments: params.arguments, transcriptRepo: transcriptRepo)
+            return SilenceRemoveTool.handle(arguments: params.arguments, store: transcriptStore)
 
         case "reelabs_analyze":
-            return await AnalyzeTool.handle(arguments: params.arguments, analysisRepo: analysisRepo)
+            return await AnalyzeTool.handle(
+                arguments: params.arguments,
+                paths: paths,
+                analysisStore: analysisStore,
+                projectStore: projectStore
+            )
 
         case "reelabs_rerender":
-            return await RerenderTool.handle(arguments: params.arguments, renderRepo: renderRepo, transcriptRepo: transcriptRepo, presetRepo: presetRepo)
+            return await RerenderTool.handle(
+                arguments: params.arguments,
+                renderStore: renderStore,
+                transcriptStore: transcriptStore,
+                projectStore: projectStore,
+                presetStore: presetStore
+            )
 
         case "reelabs_graphic":
-            return await GraphicTool.handle(arguments: params.arguments)
+            return await GraphicTool.handle(arguments: params.arguments, paths: paths)
 
         case "reelabs_layout":
             return LayoutTool.handle(arguments: params.arguments)
+
+        case "reelabs_extract_audio":
+            return await ExtractAudioTool.handle(arguments: params.arguments)
 
         default:
             return .init(
@@ -166,3 +214,82 @@ let httpServer = HTTPServer(
 )
 
 try await httpServer.start()
+
+// MARK: - Subcommand implementations
+
+func printUsage() {
+    print("""
+    reelabs-mcp — native video editing for Claude.
+
+    Usage:
+      reelabs-mcp                 Run the MCP server (default)
+      reelabs-mcp sign-in         Connect this device to your ReeLabs account
+      reelabs-mcp sign-out        Remove the stored API token
+      reelabs-mcp whoami          Show whether the device is signed in
+      reelabs-mcp --port <n>      Run the MCP server on a custom port
+      reelabs-mcp --help          Show this message
+    """)
+}
+
+func runSignIn() async {
+    let flow = DeviceCodeFlow()
+    let start: DeviceCodeFlow.Start
+    do {
+        start = try await flow.start()
+    } catch {
+        print("Failed to start sign-in: \(error.localizedDescription)")
+        exit(1)
+    }
+
+    print("""
+
+    To connect this device, open the URL below in a browser:
+
+      \(start.verificationUriComplete)
+
+    Confirm the code: \(start.userCode)
+
+    Waiting for sign-in…
+    """)
+
+    // Best-effort: open the activation URL in the default browser.
+    let task = Process()
+    task.launchPath = "/usr/bin/open"
+    task.arguments = [start.verificationUriComplete]
+    try? task.run()
+
+    do {
+        let activated = try await flow.pollUntilActivated(start: start)
+        try TokenKeychain.write(activated.apiToken)
+        print("\n✓ Device connected. You're signed in.")
+    } catch {
+        print("\nSign-in failed: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+
+func runSignOut() async {
+    do {
+        try TokenKeychain.delete()
+        print("Signed out.")
+    } catch {
+        print("Failed to sign out: \(error.localizedDescription)")
+        exit(1)
+    }
+}
+
+func runWhoAmI() async {
+    let token = (try? TokenKeychain.read()) ?? nil
+    if let token, !token.isEmpty {
+        print("Signed in. Token: \(maskedToken(token))")
+    } else {
+        print("Not signed in. Run `reelabs-mcp sign-in`.")
+    }
+}
+
+func maskedToken(_ token: String) -> String {
+    guard token.count > 8 else { return "••••" }
+    let prefix = token.prefix(5)
+    let suffix = token.suffix(3)
+    return "\(prefix)…\(suffix)"
+}

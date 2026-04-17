@@ -22,7 +22,7 @@ package enum GraphicTool {
                 ]),
                 "output_path": .object([
                     "type": .string("string"),
-                    "description": .string("Absolute path for the output PNG. Defaults to ./Generated Graphics/{uuid}.png")
+                    "description": .string("Absolute path for the output PNG. Defaults to an auto-generated name under the data root's Media/Graphics folder.")
                 ]),
                 "timeout": .object([
                     "type": .string("number"),
@@ -33,7 +33,7 @@ package enum GraphicTool {
         ])
     )
 
-    package static func handle(arguments: [String: Value]?) async -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, paths: DataPaths) async -> CallTool.Result {
         guard let html = arguments?["html"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: html", annotations: nil, _meta: nil)], isError: true)
         }
@@ -57,10 +57,10 @@ package enum GraphicTool {
         if let provided = arguments?["output_path"]?.stringValue {
             outputPath = provided
         } else {
-            let dir = FileManager.default.currentDirectoryPath + "/Generated Graphics"
-            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            let dir = paths.graphicsDir
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let uuid8 = String(UUID().uuidString.prefix(8))
-            outputPath = dir + "/\(uuid8).png"
+            outputPath = dir.appendingPathComponent("\(uuid8).png").path
         }
 
         let outputURL = URL(fileURLWithPath: outputPath)

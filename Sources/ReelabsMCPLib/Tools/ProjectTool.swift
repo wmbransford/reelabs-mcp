@@ -4,7 +4,7 @@ import MCP
 package enum ProjectTool {
     package static let tool = Tool(
         name: "reelabs_project",
-        description: "Manage projects. Actions: create (name, description?), list (status?), get (id), archive (id), delete (id).",
+        description: "Manage projects. Actions: create (name, description?), list (status?), get (slug), archive (slug), delete (slug). Each project is a folder under the data root's projects/ directory, identified by a slug derived from the project name.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
@@ -21,9 +21,9 @@ package enum ProjectTool {
                     "type": .string("string"),
                     "description": .string("Project description (for create)")
                 ]),
-                "id": .object([
-                    "type": .string("integer"),
-                    "description": .string("Project ID (for get, archive, delete)")
+                "slug": .object([
+                    "type": .string("string"),
+                    "description": .string("Project slug (for get, archive, delete)")
                 ]),
                 "status": .object([
                     "type": .string("string"),
@@ -34,7 +34,7 @@ package enum ProjectTool {
         ])
     )
 
-    package static func handle(arguments: [String: Value]?, repo: ProjectRepository) -> CallTool.Result {
+    package static func handle(arguments: [String: Value]?, store: ProjectStore) -> CallTool.Result {
         guard let action = arguments?["action"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: action", annotations: nil, _meta: nil)], isError: true)
         }
@@ -46,38 +46,38 @@ package enum ProjectTool {
                     return .init(content: [.text(text: "Missing required argument: name", annotations: nil, _meta: nil)], isError: true)
                 }
                 let desc = arguments?["description"]?.stringValue
-                let project = try repo.create(name: name, description: desc)
+                let project = try store.create(name: name, description: desc)
                 return .init(content: [.text(text: encode(project), annotations: nil, _meta: nil)], isError: false)
 
             case "list":
                 let status = arguments?["status"]?.stringValue
-                let projects = try repo.list(status: status)
+                let projects = try store.list(status: status)
                 return .init(content: [.text(text: encode(projects), annotations: nil, _meta: nil)], isError: false)
 
             case "get":
-                guard let id = extractInt64(arguments?["id"]) else {
-                    return .init(content: [.text(text: "Missing required argument: id", annotations: nil, _meta: nil)], isError: true)
+                guard let slug = arguments?["slug"]?.stringValue else {
+                    return .init(content: [.text(text: "Missing required argument: slug", annotations: nil, _meta: nil)], isError: true)
                 }
-                if let project = try repo.get(id: id) {
+                if let project = try store.get(slug: slug) {
                     return .init(content: [.text(text: encode(project), annotations: nil, _meta: nil)], isError: false)
                 }
-                return .init(content: [.text(text: "Project not found: \(id)", annotations: nil, _meta: nil)], isError: true)
+                return .init(content: [.text(text: "Project not found: \(slug)", annotations: nil, _meta: nil)], isError: true)
 
             case "archive":
-                guard let id = extractInt64(arguments?["id"]) else {
-                    return .init(content: [.text(text: "Missing required argument: id", annotations: nil, _meta: nil)], isError: true)
+                guard let slug = arguments?["slug"]?.stringValue else {
+                    return .init(content: [.text(text: "Missing required argument: slug", annotations: nil, _meta: nil)], isError: true)
                 }
-                if let project = try repo.archive(id: id) {
+                if let project = try store.archive(slug: slug) {
                     return .init(content: [.text(text: encode(project), annotations: nil, _meta: nil)], isError: false)
                 }
-                return .init(content: [.text(text: "Project not found: \(id)", annotations: nil, _meta: nil)], isError: true)
+                return .init(content: [.text(text: "Project not found: \(slug)", annotations: nil, _meta: nil)], isError: true)
 
             case "delete":
-                guard let id = extractInt64(arguments?["id"]) else {
-                    return .init(content: [.text(text: "Missing required argument: id", annotations: nil, _meta: nil)], isError: true)
+                guard let slug = arguments?["slug"]?.stringValue else {
+                    return .init(content: [.text(text: "Missing required argument: slug", annotations: nil, _meta: nil)], isError: true)
                 }
-                let deleted = try repo.delete(id: id)
-                return .init(content: [.text(text: deleted ? "Project \(id) deleted" : "Project not found: \(id)", annotations: nil, _meta: nil)], isError: !deleted)
+                let deleted = try store.delete(slug: slug)
+                return .init(content: [.text(text: deleted ? "Project '\(slug)' deleted" : "Project not found: \(slug)", annotations: nil, _meta: nil)], isError: !deleted)
 
             default:
                 return .init(content: [.text(text: "Unknown action: \(action). Use: create, list, get, archive, delete", annotations: nil, _meta: nil)], isError: true)

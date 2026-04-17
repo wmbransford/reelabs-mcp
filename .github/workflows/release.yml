@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build universal binary
+        run: |
+          # SwiftPM 6.1 exits non-zero on benign language-version warnings in
+          # transitive deps even when the build fully succeeds — assert on the
+          # produced binary instead of trusting the exit code.
+          swift build -c release --arch arm64 --arch x86_64 --product ReelabsMCP || true
+          test -x .build/apple/Products/Release/ReelabsMCP
+
+      - name: Package tarball
+        id: package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARBALL="reelabs-mcp-${VERSION}-macos.tar.gz"
+          mkdir -p dist
+          cp .build/apple/Products/Release/ReelabsMCP dist/ReelabsMCP
+          tar -czf "${TARBALL}" -C dist ReelabsMCP
+          shasum -a 256 "${TARBALL}" | tee "${TARBALL}.sha256"
+          {
+            echo "tarball=${TARBALL}"
+            echo "version=${VERSION}"
+            echo "sha256=$(shasum -a 256 ${TARBALL} | awk '{print $1}')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.package.outputs.tarball }}
+            ${{ steps.package.outputs.tarball }}.sha256
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Bump Homebrew formula
+        if: "!contains(github.ref_name, '-')"
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: reelabs-mcp
+          homebrew-tap: wmbransford/homebrew-tap
+          formula-path: Formula/reelabs-mcp.rb
+          download-url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.package.outputs.tarball }}
+          commit-message: |
+            reelabs-mcp ${{ steps.package.outputs.version }}
+
+            Created by release workflow in ${{ github.repository }}@${{ github.sha }}
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

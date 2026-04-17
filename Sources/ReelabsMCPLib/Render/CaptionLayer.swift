@@ -100,7 +100,9 @@ enum CaptionLayer {
                 let layerX = (videoSize.width - fullSize.width) / 2
                 // position is measured from top (e.g. 70% = 70% down from top).
                 // Parent has isGeometryFlipped=true, so Y increases downward.
-                let layerY = position - fullSize.height / 2
+                // Pin the BOTTOM of the text block to `position` so wrapping grows
+                // upward — keeps the visible baseline consistent across groups.
+                let layerY = position - fullSize.height
 
                 if hasHighlight {
                     // Word-by-word highlight with automatic line wrapping
@@ -148,7 +150,9 @@ enum CaptionLayer {
 
                     let lineHeight = renders.first.map { $0.baseSize.height } ?? CGFloat(fontSize)
                     let totalTextHeight = lineHeight * CGFloat(lines.count)
-                    let baseY = position - totalTextHeight / 2
+                    // Pin the BOTTOM of the text block to `position`. Wrapping
+                    // grows upward, so the visible baseline stays put.
+                    let baseY = position - totalTextHeight
 
                     for (lineIdx, line) in lines.enumerated() {
                         let thisLineW = line.enumerated().reduce(CGFloat(0)) { acc, pair in
@@ -305,7 +309,9 @@ enum CaptionLayer {
 
                     let lineHeight = renders.first.map { $0.baseSize.height } ?? CGFloat(fontSize)
                     let totalTextHeight = lineHeight * CGFloat(lines.count)
-                    let baseTopY = position - totalTextHeight / 2  // top-left Y
+                    // Pin the BOTTOM of the text block to `position`. Wrapping
+                    // grows upward so the visible baseline is consistent.
+                    let baseTopY = position - totalTextHeight
 
                     for (lineIdx, line) in lines.enumerated() {
                         let thisLineW = line.enumerated().reduce(CGFloat(0)) { acc, pair in
@@ -355,7 +361,8 @@ enum CaptionLayer {
                     ) else { return }
 
                     let layerX = (videoSize.width - fullSize.width) / 2
-                    let layerTopY = position - fullSize.height / 2
+                    // Pin the BOTTOM of the text block to `position`.
+                    let layerTopY = position - fullSize.height
                     let ciX = layerX
                     let ciY = renderH - layerTopY - imgSize.height
 
@@ -536,7 +543,8 @@ enum CaptionLayer {
     private static func formatWord(_ word: String, allCaps: Bool, stripPunctuation: Bool) -> String {
         var result = word
         if stripPunctuation {
-            result = result.filter { !$0.isPunctuation }
+            // Preserve apostrophes so contractions like "don't", "it's" stay intact.
+            result = result.filter { !$0.isPunctuation || $0 == "'" || $0 == "\u{2019}" }
         }
         if allCaps {
             result = result.uppercased()

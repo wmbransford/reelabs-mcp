@@ -1,6 +1,6 @@
 # AGENTS.md — Developer Guide for AI Agents
 
-This file is for agents **developing** this codebase, not for agents using the MCP tools. For tool usage, see `CLAUDE.md` and `SKILL.md`.
+This file is for agents **developing** this codebase, not for agents using the MCP tools. For tool usage, see `CLAUDE.md` (workflow + Technical Reference).
 
 ## Build & Run
 
@@ -23,9 +23,10 @@ swift package resolve              # after Package.swift changes
 ```
 
 - **Swift 6.2**, strict concurrency mode, **macOS 26+** minimum
-- Dependencies: `MCP` (swift-sdk >=0.12.0), `GRDB` (>=7.4.0), `swift-nio`, `swift-log`
-- `config.json` must be in the working directory or next to the binary
-- `service-account.json` is gitignored — required for transcription only
+- Dependencies: `MCP` (swift-sdk >=0.12.0), `Yams` (>=5.0.0), `swift-nio`, `swift-log`
+- `config.json` must be in the working directory or next to the binary. Set `data_path` to the `data/` folder location.
+- Transcription auth is **keychain-backed**: `reelabs-mcp sign-in` runs the OAuth 2.0 device-code flow, stores the API token in the macOS login keychain (`service=ai.reelabs.mcp`), and hands it to the Cloud Functions proxy at `us-central1-orbit-ai-d1f41.cloudfunctions.net/transcribe`. No service-account JSON on disk.
+- Override proxy base for dev with `REELABS_PROXY_BASE=http://localhost:5001/orbit-ai-d1f41/us-central1` (Functions emulator).
 
 ## Package Architecture
 
@@ -50,33 +51,40 @@ The package uses a **library/executable split** for testability:
 ```
 Sources/
 ├── ReelabsMCP/
-│   └── main.swift                  ← Entry point: imports ReelabsMCPLib, DB init, tool registration
+│   └── main.swift                  ← Entry point: imports ReelabsMCPLib, store init, tool registration
 └── ReelabsMCPLib/
-    ├── ServerConfig.swift          ← Loads config.json + service account
-    ├── DefaultPresets.swift        ← Seeds 4 caption presets on first run
+    ├── ServerConfig.swift          ← Loads config.json + resolves data root
+    ├── DefaultPresets.swift        ← Seeds caption presets on first run
     ├── ValueConversion.swift       ← MCP Value → Foundation JSON bridge
     ├── HTTPServer.swift            ← HTTP transport layer (NIO-based, serves /mcp endpoint)
-    ├── Database/
-    │   ├── DatabaseManager.swift   ← GRDB DatabasePool + migrations
-    │   └── Repositories.swift      ← 6 repository structs (Project, Asset, Transcript, Render, Preset, VisualAnalysis)
+    ├── Storage/
+    │   ├── Paths.swift             ← DataPaths: resolves projects/, presets/, kits/, Media/ subpaths from the root URL
+    │   ├── Models.swift            ← Codable record types (ProjectRecord, AssetRecord, TranscriptRecord, etc.)
+    │   ├── MarkdownStore.swift     ← Atomic read/write of markdown + YAML front matter, writeAtomicPair
+    │   ├── SlugGenerator.swift     ← slugify() + uniqueSlug()
+    │   ├── ProjectStore.swift      ← CRUD on {dataRoot}/projects/{slug}/project.md
+    │   ├── AssetStore.swift        ← CRUD on {project}/{source}.asset.md
+    │   ├── TranscriptStore.swift   ← CRUD on {project}/{source}.transcript.md + .words.json
+    │   ├── RenderStore.swift       ← CRUD on {project}/{render}.render.md (spec embedded as fenced json)
+    │   ├── PresetStore.swift       ← CRUD on {dataRoot}/presets/{name}.md
+    │   └── AnalysisStore.swift     ← CRUD on {project}/{source}.analysis.md + .scenes.json
     ├── Models/
-    │   ├── RenderSpec.swift        ← All render types: RenderSpec, SegmentSpec, CaptionConfig, Overlay, etc.
-    │   ├── Transcript.swift        ← Transcript, TranscriptWordRecord (DB), TranscriptData/TranscriptWord (in-memory)
-    │   ├── Project.swift           ← Project model
-    │   ├── Asset.swift             ← Asset model
-    │   ├── Preset.swift            ← Preset model
-    │   └── VisualAnalysis.swift    ← VisualAnalysis + VisualScene models
+    │   └── RenderSpec.swift        ← All render types: RenderSpec, SegmentSpec, CaptionConfig, Overlay, etc.
     ├── Tools/
     │   ├── ProbeTool.swift         ← reelabs_probe
-    │   ├── TranscribeTool.swift    ← reelabs_transcribe
+    │   ├── TranscribeTool.swift    ← reelabs_transcribe (writes transcript.md + words.json)
+    │   ├── TranscriptTool.swift    ← reelabs_transcript (list/get — rehydrate prior transcripts)
     │   ├── RenderTool.swift        ← reelabs_render (orchestrates build + export)
+    │   ├── RerenderTool.swift      ← reelabs_rerender (loads stored spec, applies overrides, re-runs)
     │   ├── ValidateTool.swift      ← reelabs_validate
-    │   ├── SearchTool.swift        ← reelabs_search (FTS5)
     │   ├── ProjectTool.swift       ← reelabs_project (CRUD)
     │   ├── AssetTool.swift         ← reelabs_asset (CRUD)
     │   ├── PresetTool.swift        ← reelabs_preset (CRUD)
     │   ├── SilenceRemoveTool.swift ← reelabs_silence_remove
     │   ├── AnalyzeTool.swift       ← reelabs_analyze (frame extraction + scene storage)
+    │   ├── ExtractAudioTool.swift  ← reelabs_extract_audio
+    │   ├── GraphicTool.swift       ← reelabs_graphic
+    │   ├── LayoutTool.swift        ← reelabs_layout
     │   └── Helpers.swift           ← encode(), extractInt64()
     ├── Render/
     │   ├── CompositionBuilder.swift    ← AVMutableComposition assembly (~600 lines)
@@ -93,8 +101,12 @@ Sources/
         └── AudioExtractor.swift    ← Video → 16kHz mono FLAC extraction
 
 Tests/ReelabsMCPTests/
-├── RemapTests.swift                ← 13 tests: transcript timestamp remapping (single + multi-source)
-└── RenderSpecDecodingTests.swift   ← 15 tests: JSON decoding + Resolution.pixelSize
+├── RemapTests.swift                ← transcript timestamp remapping (single + multi-source)
+├── RenderSpecDecodingTests.swift   ← JSON decoding + Resolution.pixelSize
+├── ColorUtilsTests.swift           ← hex color parsing
+├── RerenderMergeTests.swift        ← deep-merge of partial RenderSpec overrides
+├── SlugGeneratorTests.swift        ← slugify() + uniqueSlug() collision behavior
+└── MarkdownStoreTests.swift        ← round-trip, atomic pair writes, front matter parsing
 ```
 
 ## Transport
@@ -145,7 +157,7 @@ TranscribeTool.handle()
   │     ├── <= 60s: sync Recognize API (inline base64)
   │     └── > 60s: upload to GCS → batch Recognize → poll for completion → cleanup
   ├── TranscriptCompactor: group words into utterances by >=400ms silence gaps
-  └── Store in DB: transcript metadata + individual word rows (for caption rendering)
+  └── TranscriptStore.save(): writes {source}.transcript.md + {source}.words.json
 ```
 
 ### Visual Analysis Pipeline
@@ -153,41 +165,43 @@ TranscribeTool.handle()
 ```
 AnalyzeTool.handle(action: "extract")
   ├── FrameExtractor: extract frames at sample_fps as 720px JPEGs
-  ├── Store VisualAnalysis record in DB
+  ├── AnalysisStore.saveRecord: writes {source}.analysis.md front matter
   └── Return frame paths for vision-capable sub-agent
 
 AnalyzeTool.handle(action: "store")
-  └── Persist VisualScene records from sub-agent analysis
+  └── AnalysisStore.storeScenes: writes {source}.scenes.json + updates status
 ```
 
-## Database
+## Data Store
 
-SQLite via GRDB. Location: `~/Library/Application Support/ReelabsMCP/reelabs.sqlite`
+All persistent state lives on disk as markdown files + JSON sidecars under the `data/` root (configurable via `data_path` in config.json; defaults to `~/Library/Application Support/ReelabsMCP/data`).
 
-Note: `reelabs.db` in the project root is a local development artifact, not the production database.
+### Layout
 
-### Schema (migration: `v2_schema`)
+```
+data/
+├── projects/
+│   └── {project-slug}/
+│       ├── project.md                  ← project metadata (YAML front matter)
+│       ├── {source}.asset.md           ← per-source-video metadata
+│       ├── {source}.transcript.md      ← agent-readable utterance view
+│       ├── {source}.words.json         ← immutable word-level timestamps (for renderer)
+│       ├── {source}.analysis.md        ← visual analysis metadata
+│       ├── {source}.scenes.json        ← scene descriptions
+│       └── {render}.render.md          ← render metadata + full RenderSpec as fenced ```json block
+└── presets/
+    └── {name}.md                       ← type: caption | render | audio in front matter
+```
 
-| Table | Key Columns | Notes |
-|-------|-------------|-------|
-| `projects` | id, name, description, status, createdAt, updatedAt | status: "active" or "archived" |
-| `assets` | id, projectId (FK→projects), filePath, filename, durationMs, width, height, fps, codec, hasAudio, fileSizeBytes, tags | tags stored as JSON string |
-| `transcripts` | id, assetId (FK→assets, nullable), sourcePath, fullText, compactJson, durationSeconds, wordCount | compactJson = utterance array for agent context |
-| `transcript_words` | id, transcriptId (FK→transcripts), wordIndex, word, startTime, endTime, confidence | One row per word. Indexed on transcriptId |
-| `transcripts_fts` | FTS5 virtual table on fullText | BM25 ranking. Kept in sync via triggers (INSERT/UPDATE/DELETE) |
-| `renders` | id, projectId (FK→projects, nullable), specJson, outputPath, durationSeconds, fileSizeBytes, status, errorMessage | Stores full spec for history |
-| `presets` | id, name (unique), type, configJson, description | Seeded with tiktok/subtitle/minimal/bold_center |
-| `visual_analyses` | id, assetId, sourcePath, status, sampleFps, frameCount, sceneCount, durationSeconds, framesDir | Frame extraction metadata |
-| `visual_scenes` | id, analysisId (FK→visual_analyses), sceneIndex, startTime, endTime, description, tags, sceneType | Scene descriptions from visual analysis |
+### Store Conventions
 
-### GRDB Conventions
-
-- All models implement `FetchableRecord`, `MutablePersistableRecord`, `Codable`, `Sendable`
-- Use `didInsert(_ inserted: InsertionSuccess)` to capture auto-increment IDs
-- Repositories are plain structs holding a `DatabasePool` reference
-- Read operations use `dbPool.read { db in }`, writes use `dbPool.write { db in }`
-- Timestamps use ISO8601 strings via `Project.timestamp()` (shared across all models)
-- Migrations are append-only in `DatabaseManager.registerMigrations` — never modify existing migrations
+- Every markdown file has YAML front matter parsed as a `Codable` record type (see `Storage/Models.swift`)
+- Every front matter includes `schema_version: 1` for future-proofing
+- All writes go through `MarkdownStore.write` (single file, atomic) or `writeAtomicPair` (md + json sidecar)
+- Identifiers are human-readable slugs (kebab-case) — collisions handled by `SlugGenerator.uniqueSlug`
+- Stores are plain structs holding a `DataPaths` value; passed explicitly to tools (no globals)
+- `reelabs_render` stores the full spec as a fenced ```json block inside the body of `{render}.render.md` — `reelabs_rerender` parses it back
+- Full-text search is provided by ripgrep on `data/**/*.md` — no bespoke search tool needed
 
 ## Adding a New Tool
 
@@ -226,7 +240,7 @@ package enum NewTool {
    - Add `NewTool.tool` to the `ListTools` handler array
    - Add a `case "reelabs_newtool":` to the `CallTool` switch
 
-3. **Update SKILL.md** with the new tool's input/output spec (agents using the MCP rely on this)
+3. **Update CLAUDE.md** — add a row in the Tools table and a new subsection under the Technical Reference with the tool's input/output spec (agents using the MCP rely on this)
 
 4. **Rebuild**: `./dev.sh`
 
@@ -244,11 +258,15 @@ package enum NewTool {
 
 Tests live in `Tests/ReelabsMCPTests/` and use Swift Testing (`import Testing`, `@Suite`, `@Test`).
 
-Current test suites (28 tests):
-- **`remapTranscript`** (9 tests) — single-source transcript timestamp remapping with speed, gaps, clamping
-- **`remapMultiSourceTranscript`** (4 tests) — multi-source remapping, missing transcripts, source reuse
-- **`RenderSpec Decoding`** (10 tests) — JSON decoding of all spec fields, round-trip encode/decode
-- **`Resolution.pixelSize`** (5 tests) — resolution preset scaling, even pixel enforcement
+Current test suites (71 tests across 12 suites):
+- **`remapTranscript`** — single-source transcript timestamp remapping with speed, gaps, clamping
+- **`remapMultiSourceTranscript`** — multi-source remapping, missing transcripts, source reuse
+- **`RenderSpec Decoding`** — JSON decoding of all spec fields, round-trip encode/decode
+- **`Resolution.pixelSize`** — resolution preset scaling, even pixel enforcement
+- **`parseHexColor`** — 6/8-digit hex parsing with alpha
+- **`RenderSpec merge helpers`** — deep-merge of partial overrides for rerender
+- **`SlugGenerator.slugify` / `uniqueSlug`** — identifier generation, collision handling
+- **`MarkdownStore round-trip` / `writeAtomicPair` / `splitFrontMatter`** — persistence layer
 
 When adding new logic (especially timestamp math, decoding, or composition assembly), add tests. The library split makes any `internal` or `package` symbol testable via `@testable import ReelabsMCPLib`.
 
@@ -258,7 +276,7 @@ When adding new logic (especially timestamp math, decoding, or composition assem
 - All models are `struct` + `Sendable` (value types, no issues)
 - `CompositionBuilder` and `ExportService` are `final class: Sendable` (no mutable state)
 - `ChirpClient` is `final class: Sendable` (all properties are `let`)
-- `DatabaseManager` is `final class: Sendable` (GRDB's `DatabasePool` is thread-safe)
+- All stores are value-type `struct: Sendable` (markdown I/O is stateless aside from the `DataPaths` value they hold)
 - `HTTPServer` is an `actor` (handles concurrent HTTP connections safely)
 - Repository structs hold a `DatabasePool` and are `Sendable`
 - Tool handlers are `static func` — no instance state
@@ -289,7 +307,7 @@ Chirp batch API resets word timestamps to 0 mid-stream within a single result bl
 - **CoreAnimation timing.** Caption animations use `AVCoreAnimationBeginTimeAtZero` and fractional keyTimes (0.0-1.0 of total duration). Getting this wrong makes captions invisible or stuck.
 - **FLAC extraction is two-step.** Video → M4A (via AVAssetExportSession) → FLAC (via AVAudioConverter at 16kHz mono). Direct FLAC export from video isn't supported by AVFoundation.
 - **Chirp protobuf Duration parsing.** Google returns duration values in three formats: string `"9.400s"`, object `{"seconds": 9, "nanos": 400000000}`, or omitted (= 0). `ChirpClient.parseDurationValue()` handles all three.
-- **RenderSpec JSON uses snake_case.** The decoder uses `.convertFromSnakeCase`, so `outputPath` in Swift maps to `output_path` in JSON. SKILL.md documents the JSON (snake_case) names. RenderSpec.swift documents the Swift (camelCase) names.
+- **RenderSpec JSON uses snake_case.** The decoder uses `.convertFromSnakeCase`, so `outputPath` in Swift maps to `output_path` in JSON. CLAUDE.md's Technical Reference documents the JSON (snake_case) names. RenderSpec.swift documents the Swift (camelCase) names.
 - **Overlay coordinates are 0.0-1.0 fractions**, not pixels. Top-left origin. `buildOverlayTransform()` converts to pixel coordinates using renderSize.
 - **Caption fontSize is a percentage of video height**, not points. `7.0` means 7% of the output height.
 - **The `resolution` field accepts two formats**: a string preset (`"720p"`, `"1080p"`, `"4k"`) or an object (`{"width": 1920, "height": 1080}`). The custom `Resolution` Codable handles both.

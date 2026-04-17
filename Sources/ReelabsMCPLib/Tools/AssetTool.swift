@@ -4,7 +4,7 @@ import MCP
 package enum AssetTool {
     package static let tool = Tool(
         name: "reelabs_asset",
-        description: "Manage project assets. Actions: add (project_id, path — auto-probes metadata), list (project_id), get (id), tag (id, tags[]), delete (id).",
+        description: "Manage project assets (source video files). Actions: add (project, path — auto-probes metadata), list (project), get (project, source), tag (project, source, tags[]), delete (project, source). Source slugs are derived from the filename (e.g. C0048.MP4 → c0048).",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
@@ -13,17 +13,17 @@ package enum AssetTool {
                     "description": .string("Action: add, list, get, tag, delete"),
                     "enum": .array([.string("add"), .string("list"), .string("get"), .string("tag"), .string("delete")])
                 ]),
-                "project_id": .object([
-                    "type": .string("integer"),
-                    "description": .string("Project ID (for add, list)")
+                "project": .object([
+                    "type": .string("string"),
+                    "description": .string("Project slug")
                 ]),
                 "path": .object([
                     "type": .string("string"),
                     "description": .string("Absolute file path (for add)")
                 ]),
-                "id": .object([
-                    "type": .string("integer"),
-                    "description": .string("Asset ID (for get, tag, delete)")
+                "source": .object([
+                    "type": .string("string"),
+                    "description": .string("Source slug (for get, tag, delete)")
                 ]),
                 "tags": .object([
                     "type": .string("array"),
@@ -35,7 +35,11 @@ package enum AssetTool {
         ])
     )
 
-    package static func handle(arguments: [String: Value]?, assetRepo: AssetRepository) async -> CallTool.Result {
+    package static func handle(
+        arguments: [String: Value]?,
+        assetStore: AssetStore,
+        projectStore: ProjectStore
+    ) async -> CallTool.Result {
         guard let action = arguments?["action"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: action", annotations: nil, _meta: nil)], isError: true)
         }
@@ -43,54 +47,65 @@ package enum AssetTool {
         do {
             switch action {
             case "add":
-                guard let projectId = extractInt64(arguments?["project_id"]),
+                guard let project = arguments?["project"]?.stringValue,
                       let path = arguments?["path"]?.stringValue else {
-                    return .init(content: [.text(text: "Missing required arguments: project_id, path", annotations: nil, _meta: nil)], isError: true)
+                    return .init(content: [.text(text: "Missing required arguments: project, path", annotations: nil, _meta: nil)], isError: true)
                 }
 
-                let url = URL(fileURLWithPath: path)
                 guard FileManager.default.fileExists(atPath: path) else {
                     return .init(content: [.text(text: "File not found: \(path)", annotations: nil, _meta: nil)], isError: true)
                 }
 
-                var asset = Asset(projectId: projectId, filePath: path, filename: url.lastPathComponent)
+                // Ensure project exists (auto-create with slug if needed)
+                _ = try projectStore.createWithSlug(slug: project)
+
+                let url = URL(fileURLWithPath: path)
+                let sourceSlug = DataPaths.deriveSourceSlug(fromSourcePath: path)
+
+                var record = AssetRecord(
+                    slug: sourceSlug,
+                    filename: url.lastPathComponent,
+                    filePath: path
+                )
 
                 // Auto-probe metadata
                 do {
                     let probe = try await VideoProbe.probe(path: path)
-                    asset.durationMs = probe.durationMs
-                    asset.width = probe.width
-                    asset.height = probe.height
-                    asset.fps = probe.fps
-                    asset.codec = probe.codec
-                    asset.hasAudio = probe.hasAudio
-                    asset.fileSizeBytes = probe.fileSizeBytes
+                    record.durationSeconds = Double(probe.durationMs) / 1000.0
+                    record.width = probe.width
+                    record.height = probe.height
+                    record.fps = probe.fps
+                    record.codec = probe.codec
+                    record.hasAudio = probe.hasAudio
+                    record.fileSizeBytes = probe.fileSizeBytes
                 } catch {
                     // Still add the asset even if probe fails
                 }
 
-                let saved = try assetRepo.create(asset)
+                let saved = try assetStore.upsert(project: project, source: sourceSlug, record: record)
                 return .init(content: [.text(text: encode(saved), annotations: nil, _meta: nil)], isError: false)
 
             case "list":
-                guard let projectId = extractInt64(arguments?["project_id"]) else {
-                    return .init(content: [.text(text: "Missing required argument: project_id", annotations: nil, _meta: nil)], isError: true)
+                guard let project = arguments?["project"]?.stringValue else {
+                    return .init(content: [.text(text: "Missing required argument: project", annotations: nil, _meta: nil)], isError: true)
                 }
-                let assets = try assetRepo.list(projectId: projectId)
+                let assets = try assetStore.list(project: project)
                 return .init(content: [.text(text: encode(assets), annotations: nil, _meta: nil)], isError: false)
 
             case "get":
-                guard let id = extractInt64(arguments?["id"]) else {
-                    return .init(content: [.text(text: "Missing required argument: id", annotations: nil, _meta: nil)], isError: true)
+                guard let project = arguments?["project"]?.stringValue,
+                      let source = arguments?["source"]?.stringValue else {
+                    return .init(content: [.text(text: "Missing required arguments: project, source", annotations: nil, _meta: nil)], isError: true)
                 }
-                if let asset = try assetRepo.get(id: id) {
+                if let asset = try assetStore.get(project: project, source: source) {
                     return .init(content: [.text(text: encode(asset), annotations: nil, _meta: nil)], isError: false)
                 }
-                return .init(content: [.text(text: "Asset not found: \(id)", annotations: nil, _meta: nil)], isError: true)
+                return .init(content: [.text(text: "Asset not found: \(project)/\(source)", annotations: nil, _meta: nil)], isError: true)
 
             case "tag":
-                guard let id = extractInt64(arguments?["id"]) else {
-                    return .init(content: [.text(text: "Missing required argument: id", annotations: nil, _meta: nil)], isError: true)
+                guard let project = arguments?["project"]?.stringValue,
+                      let source = arguments?["source"]?.stringValue else {
+                    return .init(content: [.text(text: "Missing required arguments: project, source", annotations: nil, _meta: nil)], isError: true)
                 }
                 let tags: [String]
                 if let tagArray = arguments?["tags"]?.arrayValue {
@@ -98,18 +113,18 @@ package enum AssetTool {
                 } else {
                     tags = []
                 }
-                try assetRepo.updateTags(id: id, tags: tags)
-                if let asset = try assetRepo.get(id: id) {
+                if let asset = try assetStore.updateTags(project: project, source: source, tags: tags) {
                     return .init(content: [.text(text: encode(asset), annotations: nil, _meta: nil)], isError: false)
                 }
-                return .init(content: [.text(text: "Asset not found: \(id)", annotations: nil, _meta: nil)], isError: true)
+                return .init(content: [.text(text: "Asset not found: \(project)/\(source)", annotations: nil, _meta: nil)], isError: true)
 
             case "delete":
-                guard let id = extractInt64(arguments?["id"]) else {
-                    return .init(content: [.text(text: "Missing required argument: id", annotations: nil, _meta: nil)], isError: true)
+                guard let project = arguments?["project"]?.stringValue,
+                      let source = arguments?["source"]?.stringValue else {
+                    return .init(content: [.text(text: "Missing required arguments: project, source", annotations: nil, _meta: nil)], isError: true)
                 }
-                let deleted = try assetRepo.delete(id: id)
-                return .init(content: [.text(text: deleted ? "Asset \(id) deleted" : "Asset not found: \(id)", annotations: nil, _meta: nil)], isError: !deleted)
+                let deleted = try assetStore.delete(project: project, source: source)
+                return .init(content: [.text(text: deleted ? "Asset \(project)/\(source) deleted" : "Asset not found: \(project)/\(source)", annotations: nil, _meta: nil)], isError: !deleted)
 
             default:
                 return .init(content: [.text(text: "Unknown action: \(action). Use: add, list, get, tag, delete", annotations: nil, _meta: nil)], isError: true)

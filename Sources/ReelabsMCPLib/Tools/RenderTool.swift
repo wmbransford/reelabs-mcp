@@ -4,7 +4,7 @@ import MCP
 package enum RenderTool {
     package static let tool = Tool(
         name: "reelabs_render",
-        description: "Render a video from a declarative RenderSpec. Handles trimming, speed changes, transitions, captions, audio mixing, aspect ratio, and overlays (video, color, text). Pass the full spec as JSON.",
+        description: "Render a video from a declarative RenderSpec. Handles trimming, speed changes, transitions, captions, audio mixing, aspect ratio, and overlays (video, color, text). Pass the full spec as JSON. transcriptId in the spec is either a compound 'project/source' string or just 'source' (resolved within the render's project).",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
@@ -12,40 +12,51 @@ package enum RenderTool {
                     "type": .string("object"),
                     "description": .string("The full RenderSpec object defining the render")
                 ]),
-                "project_id": .object([
-                    "type": .string("integer"),
-                    "description": .string("Optional project ID to associate render with")
+                "project": .object([
+                    "type": .string("string"),
+                    "description": .string("Optional project slug. If omitted, derived from the first source file's parent directory.")
+                ]),
+                "slug": .object([
+                    "type": .string("string"),
+                    "description": .string("Optional base slug for this render (e.g. 'trust-me-bro'). Defaults to the output filename.")
                 ])
             ]),
             "required": .array([.string("spec")])
         ])
     )
 
-    package static func handle(arguments: [String: Value]?, renderRepo: RenderRepository, transcriptRepo: TranscriptRepository, presetRepo: PresetRepository) async -> CallTool.Result {
+    package static func handle(
+        arguments: [String: Value]?,
+        renderStore: RenderStore,
+        transcriptStore: TranscriptStore,
+        projectStore: ProjectStore,
+        presetStore: PresetStore
+    ) async -> CallTool.Result {
         guard let specValue = arguments?["spec"] else {
             return .init(content: [.text(text: "Missing required argument: spec", annotations: nil, _meta: nil)], isError: true)
         }
 
-        let projectId = extractInt64(arguments?["project_id"])
-
         do {
-            // Decode spec from Value
             let specData = try JSONSerialization.data(withJSONObject: specValue.toJSONObject())
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             let spec = try decoder.decode(RenderSpec.self, from: specData)
 
+            // Resolve the project for this render
+            let projectSlug: String
+            if let explicit = arguments?["project"]?.stringValue {
+                projectSlug = explicit
+            } else if let firstSource = spec.sources.first {
+                projectSlug = DataPaths.deriveProjectSlug(fromSourcePath: firstSource.path)
+            } else {
+                return .init(content: [.text(text: "No project arg and no sources to derive one from.", annotations: nil, _meta: nil)], isError: true)
+            }
+            _ = try projectStore.createWithSlug(slug: projectSlug)
 
             // Encode spec for storage
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys]
+            encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
             let specJson = String(data: try encoder.encode(spec), encoding: .utf8) ?? "{}"
-
-            // Build composition and render
-            let builder = CompositionBuilder()
-            let exportService = ExportService()
-            let profiler = RenderProfiler()
-            FrameStats.shared.reset()
 
             // Determine caption mode: per-source, legacy single-transcript, or error
             let hasPerSourceTranscripts = spec.sources.contains { $0.transcriptId != nil }
@@ -55,28 +66,25 @@ package enum RenderTool {
                 return .init(content: [.text(text: "Caption error: transcriptId is required when captions are specified. Set it on each source or in captions.", annotations: nil, _meta: nil)], isError: true)
             }
 
-            // Resolve caption transcript(s)
+            // Resolve transcripts
             var transcriptData: TranscriptData? = nil
             if spec.captions != nil && hasPerSourceTranscripts {
-                // Per-source mode: load words for each source that has a transcriptId
                 var sourceTranscripts: [String: [TranscriptWord]] = [:]
                 for source in spec.sources {
                     guard let tid = source.transcriptId else { continue }
-                    guard let transcript = try transcriptRepo.get(id: Int64(tid)) else {
-                        return .init(content: [.text(text: "Caption error: transcript_id \(tid) (source '\(source.id)') not found in database. Run reelabs_transcribe first.", annotations: nil, _meta: nil)], isError: true)
-                    }
-                    let words = try transcriptRepo.getWords(transcriptId: Int64(tid))
+                    let words = try Self.loadWords(
+                        transcriptId: tid,
+                        defaultProject: projectSlug,
+                        store: transcriptStore
+                    )
                     if words.isEmpty {
-                        return .init(content: [.text(text: "Caption error: transcript \(tid) (source '\(source.id)') has 0 words in database. Re-run reelabs_transcribe.", annotations: nil, _meta: nil)], isError: true)
+                        return .init(content: [.text(text: "Caption error: transcript '\(tid)' (source '\(source.id)') not found or has 0 words. Run reelabs_transcribe first.", annotations: nil, _meta: nil)], isError: true)
                     }
                     sourceTranscripts[source.id] = words
-                    _ = transcript // suppress unused warning
                 }
                 transcriptData = remapMultiSourceTranscript(sourceTranscripts: sourceTranscripts, segments: spec.segments)
 
-                // Also remap words from overlay sources not used in segments.
-                // This handles the screen-recording layout workflow where the speaker cam
-                // is an overlay (not a segment) but has the transcript for captions.
+                // Overlay sources not in segments
                 if let overlays = spec.overlays {
                     let segmentSourceIds = Set(spec.segments.map { $0.sourceId })
                     let overlayWords = remapOverlaySources(
@@ -96,27 +104,30 @@ package enum RenderTool {
                         )
                     }
                 }
-            } else if let captionConfig = spec.captions, let transcriptId = captionConfig.transcriptId {
-                // Legacy single-transcript mode
-                guard let transcript = try transcriptRepo.get(id: Int64(transcriptId)) else {
-                    return .init(content: [.text(text: "Caption error: transcript_id \(transcriptId) not found in database. Run reelabs_transcribe first.", annotations: nil, _meta: nil)], isError: true)
-                }
-                let words = try transcriptRepo.getWords(transcriptId: Int64(transcriptId))
+            } else if let captionConfig = spec.captions, let tid = captionConfig.transcriptId {
+                let words = try Self.loadWords(
+                    transcriptId: tid,
+                    defaultProject: projectSlug,
+                    store: transcriptStore
+                )
                 if words.isEmpty {
-                    return .init(content: [.text(text: "Caption error: transcript \(transcriptId) has 0 words in database. Re-run reelabs_transcribe.", annotations: nil, _meta: nil)], isError: true)
+                    return .init(content: [.text(text: "Caption error: transcript '\(tid)' not found or has 0 words. Run reelabs_transcribe first.", annotations: nil, _meta: nil)], isError: true)
                 }
+                let parts = DataPaths.splitCompoundId(tid) ?? (projectSlug, tid)
+                let record = try transcriptStore.getRecord(project: parts.0, source: parts.1)
+                let fullText = words.map { $0.word }.joined(separator: " ")
                 transcriptData = TranscriptData(
                     words: words,
-                    fullText: transcript.fullText,
-                    durationSeconds: transcript.durationSeconds ?? 0
+                    fullText: fullText,
+                    durationSeconds: record?.durationSeconds ?? 0
                 )
             }
 
-            // Resolve caption preset — fail loudly if requested but missing
+            // Resolve caption preset
             var resolvedCaptionConfig = spec.captions
             if let presetName = spec.captions?.preset {
-                guard let preset = try presetRepo.get(name: presetName) else {
-                    return .init(content: [.text(text: "Caption error: preset '\(presetName)' not found. Available: tiktok, subtitle, minimal, bold_center.", annotations: nil, _meta: nil)], isError: true)
+                guard let preset = try presetStore.get(name: presetName) else {
+                    return .init(content: [.text(text: "Caption error: preset '\(presetName)' not found. Available: tiktok, subtitle, minimal, bold_center, william.", annotations: nil, _meta: nil)], isError: true)
                 }
                 guard let presetData = preset.configJson.data(using: .utf8) else {
                     return .init(content: [.text(text: "Caption error: preset '\(presetName)' contains invalid encoding", annotations: nil, _meta: nil)], isError: true)
@@ -125,12 +136,10 @@ package enum RenderTool {
                 resolvedCaptionConfig = mergeCaptionConfig(base: presetConfig, override: spec.captions)
             }
 
-            // Validate segments are not empty
             if spec.segments.isEmpty {
                 return .init(content: [.text(text: "No segments defined — nothing to render.", annotations: nil, _meta: nil)], isError: true)
             }
 
-            // Validate music file exists before building
             if let audio = spec.audio, let musicPath = audio.musicPath {
                 if !FileManager.default.fileExists(atPath: musicPath) {
                     return .init(content: [.text(text: "Music file not found: \(musicPath)", annotations: nil, _meta: nil)], isError: true)
@@ -138,29 +147,28 @@ package enum RenderTool {
             }
 
             let outputURL = URL(fileURLWithPath: spec.outputPath)
-
-            // Ensure output directory exists
             let outputDir = outputURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
             // Remap transcript word timestamps from source time to composition time
-            // (Per-source mode already remaps during construction, so only remap in legacy mode)
             let preRemapWordCount = transcriptData?.words.count ?? 0
             if let td = transcriptData, !hasPerSourceTranscripts {
                 transcriptData = remapTranscript(td, segments: spec.segments)
             }
             let postRemapWordCount = transcriptData?.words.count ?? 0
 
-            // Fail loudly if remap dropped all words
             if spec.captions != nil && preRemapWordCount > 0 && postRemapWordCount == 0 {
                 return .init(content: [.text(text: "Caption error: no words fall within segment time ranges. Check segment boundaries.", annotations: nil, _meta: nil)], isError: true)
             }
 
-            // Text and image overlays suppress captions in their time range.
-            // Bare color overlays (e.g. layout backgrounds) do NOT suppress captions.
             let captionExclusionZones: [ClosedRange<Double>] = (spec.overlays ?? [])
                 .filter { $0.sourceId == nil && ($0.text != nil || $0.imagePath != nil) }
                 .map { $0.start...$0.end }
+
+            let builder = CompositionBuilder()
+            let exportService = ExportService()
+            let profiler = RenderProfiler()
+            FrameStats.shared.reset()
 
             let captionConfigForRender = resolvedCaptionConfig
             let transcriptDataForRender = transcriptData
@@ -186,12 +194,10 @@ package enum RenderTool {
             }
             profiler.logSummary()
 
-            // Fail loudly if captions were requested but not applied
             if spec.captions != nil && !exportResult.captionsApplied {
                 return .init(content: [.text(text: "Caption error: captions were requested but could not be applied.", annotations: nil, _meta: nil)], isError: true)
             }
 
-            // Get output file info
             let fileSize: Int64
             if let attrs = try? FileManager.default.attributesOfItem(atPath: spec.outputPath),
                let size = attrs[.size] as? Int64 {
@@ -199,20 +205,34 @@ package enum RenderTool {
             } else {
                 fileSize = 0
             }
-
             let duration = result.totalDuration
 
-            // Save to database
-            let renderId = try renderRepo.create(
-                projectId: projectId,
-                specJson: specJson,
-                outputPath: spec.outputPath,
+            // Build render record
+            let baseSlug: String
+            if let s = arguments?["slug"]?.stringValue, !s.isEmpty {
+                baseSlug = SlugGenerator.slugify(s)
+            } else {
+                baseSlug = SlugGenerator.slugify(outputURL.deletingPathExtension().lastPathComponent)
+            }
+
+            let record = RenderRecord(
+                slug: baseSlug,
+                status: "completed",
                 durationSeconds: duration,
+                outputPath: spec.outputPath,
                 fileSizeBytes: fileSize,
-                status: "completed"
+                sources: spec.sources.map { $0.id }
             )
 
-            // Build detailed response so the agent knows exactly what happened
+            let saved = try renderStore.save(
+                project: projectSlug,
+                baseSlug: baseSlug,
+                record: record,
+                specJson: specJson,
+                notes: nil
+            )
+
+            // Build response
             let captionsApplied = exportResult.captionsApplied
             let captionWordCount = transcriptData?.words.count ?? 0
             let actualWidth = Int(result.renderSize.width)
@@ -222,14 +242,15 @@ package enum RenderTool {
             let musicVolume = spec.audio?.musicVolume ?? (musicApplied ? 0.3 : 0.0)
             let codec = (spec.quality?.codec ?? .h264).rawValue
 
-            // Caption diagnostics: segment time ranges for debugging remap
             let segmentRanges = spec.segments.map { ["start": $0.start, "end": $0.end] }
             let firstRemappedWords: [[String: Any]] = (transcriptData?.words.prefix(3) ?? []).map {
                 ["word": $0.word, "start": round($0.startTime * 1000) / 1000, "end": round($0.endTime * 1000) / 1000]
             }
 
             let response: [String: Any] = [
-                "render_id": renderId,
+                "render_id": "\(projectSlug)/\(saved.slug)",
+                "project": projectSlug,
+                "slug": saved.slug,
                 "output_path": spec.outputPath,
                 "duration_seconds": round(duration * 100) / 100,
                 "file_size_bytes": fileSize,
@@ -255,9 +276,8 @@ package enum RenderTool {
                 "aspect_ratio": aspectLabel,
                 "timing": profiler.responseTiming()
             ]
-            let responseData = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
-            let text = String(data: responseData, encoding: .utf8) ?? "{}"
-            return .init(content: [.text(text: text, annotations: nil, _meta: nil)], isError: false)
+            let responseData = try safeJSONData(from: response)
+            return .init(content: [.text(text: String(data: responseData, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
         } catch let decodingError as DecodingError {
             let detail: String
             switch decodingError {
@@ -273,11 +293,38 @@ package enum RenderTool {
             return .init(content: [.text(text: "Render failed: \(error.localizedDescription)", annotations: nil, _meta: nil)], isError: true)
         }
     }
+
+    /// Load word timestamps for a transcript reference. Accepts either "project/source" or bare "source".
+    /// Bare source is resolved within `defaultProject`.
+    static func loadWords(
+        transcriptId: String,
+        defaultProject: String,
+        store: TranscriptStore
+    ) throws -> [TranscriptWord] {
+        let project: String
+        let source: String
+        if let parts = DataPaths.splitCompoundId(transcriptId) {
+            project = parts.project
+            source = parts.source
+        } else {
+            project = defaultProject
+            source = transcriptId
+        }
+        let entries = try store.getWords(project: project, source: source)
+        return entries.map { entry in
+            TranscriptWord(
+                word: entry.word,
+                startTime: entry.start,
+                endTime: entry.end,
+                confidence: entry.confidence
+            )
+        }
+    }
 }
 
+// MARK: - Remapping helpers (unchanged from prior implementation)
+
 /// Remap transcript word timestamps from source-video time to composition time.
-/// Without this, captions are misaligned in multi-segment edits because the
-/// transcript stores times relative to the original source, not the cut.
 func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) -> TranscriptData {
     var mappings: [(sourceStart: Double, sourceEnd: Double, compositionStart: Double, speed: Double)] = []
     var compositionTime = 0.0
@@ -285,8 +332,6 @@ func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) -> Transcr
         let speed = seg.speed ?? 1.0
         let duration = (seg.end - seg.start) / speed
 
-        // Match CompositionBuilder.swift pullback logic:
-        // Incoming crossfade pulls the insertion time back to create the overlap region.
         if index > 0, let transition = seg.transition, transition.type == .crossfade {
             let clamped = min(transition.duration, duration)
             compositionTime -= clamped
@@ -296,7 +341,6 @@ func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) -> Transcr
         compositionTime += duration
     }
 
-    // Log segment mappings for debugging
     for (i, m) in mappings.enumerated() {
         captionLog("[remapTranscript] seg[\(i)]: source=\(m.sourceStart)-\(m.sourceEnd) → comp=\(m.compositionStart), speed=\(m.speed)")
     }
@@ -308,7 +352,6 @@ func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) -> Transcr
                 let newStart = m.compositionStart + (word.startTime - m.sourceStart) / m.speed
                 let clampedEnd = min(word.endTime, m.sourceEnd)
                 let newEnd = m.compositionStart + (clampedEnd - m.sourceStart) / m.speed
-                // Drop words with invalid timing (endTime < startTime after remap)
                 if newEnd <= newStart {
                     captionLog("[remapTranscript] DROPPED '\(word.word)': src=\(word.startTime)-\(word.endTime) seg[\(segIdx)]=\(m.sourceStart)-\(m.sourceEnd) → comp=\(newStart)-\(newEnd)")
                     break
@@ -334,8 +377,6 @@ func remapTranscript(_ data: TranscriptData, segments: [SegmentSpec]) -> Transcr
     )
 }
 
-/// Remap words from multiple source transcripts into a single composition-time TranscriptData.
-/// Each segment pulls words from the transcript belonging to its source.
 func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], segments: [SegmentSpec]) -> TranscriptData {
     var compositionTime = 0.0
     var remapped: [TranscriptWord] = []
@@ -345,7 +386,6 @@ func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], s
         let speed = seg.speed ?? 1.0
         let segDuration = (seg.end - seg.start) / speed
 
-        // Match CompositionBuilder.swift pullback logic
         if segIdx > 0, let transition = seg.transition, transition.type == .crossfade {
             let clamped = min(transition.duration, segDuration)
             compositionTime -= clamped
@@ -390,9 +430,6 @@ func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], s
     )
 }
 
-/// Remap words from overlay sources that aren't used in any segment.
-/// This handles screen-recording layouts where the speaker cam is an overlay with a transcript.
-/// Each overlay defines a composition-time window and a sourceStart offset into the source file.
 func remapOverlaySources(
     sourceTranscripts: [String: [TranscriptWord]],
     overlays: [Overlay],

@@ -47,7 +47,7 @@ package struct RenderSpec: Codable, Sendable {
     package struct Source: Codable, Sendable {
         let id: String
         let path: String
-        let transcriptId: Int?
+        let transcriptId: String?
     }
 }
 
@@ -165,7 +165,7 @@ package struct Transition: Codable, Sendable {
 
 package struct CaptionConfig: Codable, Sendable {
     let preset: String?
-    let transcriptId: Int?
+    let transcriptId: String?
     let fontFamily: String?
     let fontSize: Double?
     let fontWeight: String?

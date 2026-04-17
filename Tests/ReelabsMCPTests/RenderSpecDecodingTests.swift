@@ -42,7 +42,7 @@ struct RenderSpecDecodingTests {
         let json = """
         {
             "sources": [
-                {"id": "cam1", "path": "/tmp/cam1.mp4", "transcript_id": 42}
+                {"id": "cam1", "path": "/tmp/cam1.mp4", "transcript_id": "opus-47-video/cam1"}
             ],
             "segments": [
                 {
@@ -80,7 +80,7 @@ struct RenderSpecDecodingTests {
         """
         let spec = try decode(json)
 
-        #expect(spec.sources[0].transcriptId == 42)
+        #expect(spec.sources[0].transcriptId == "opus-47-video/cam1")
         #expect(spec.segments[0].speed == 1.5)
         #expect(spec.segments[0].volume == 0.8)
         #expect(spec.segments[0].transform?.resolvedScale == 1.2)
