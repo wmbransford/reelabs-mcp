@@ -25,9 +25,6 @@ let package = Package(
             path: "Sources/ReelabsMCPLib",
             resources: [
                 .copy("Resources/kits"),
-            ],
-            swiftSettings: [
-                .swiftLanguageMode(.v6),
             ]
         ),
         .executableTarget(
@@ -37,10 +34,7 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "Logging", package: "swift-log"),
             ],
-            path: "Sources/ReelabsMCP",
-            swiftSettings: [
-                .swiftLanguageMode(.v6),
-            ]
+            path: "Sources/ReelabsMCP"
         ),
         .testTarget(
             name: "ReelabsMCPTests",
