@@ -238,6 +238,57 @@ package struct AnalysisRecord: Codable, Sendable {
     }
 }
 
+package struct FocusPoint: Codable, Equatable, Sendable {
+    package let x: Double
+    package let y: Double
+
+    package init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
+}
+
+package struct BoundingBox: Codable, Equatable, Sendable {
+    package let x: Double
+    package let y: Double
+    package let w: Double
+    package let h: Double
+
+    package init(x: Double, y: Double, w: Double, h: Double) {
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+    }
+}
+
+package struct Subject: Codable, Sendable {
+    package let id: Int
+    package let name: String?
+    package let clusterId: Int?
+    package let bbox: BoundingBox?
+    package let center: FocusPoint?
+
+    package init(
+        id: Int,
+        name: String? = nil,
+        clusterId: Int? = nil,
+        bbox: BoundingBox? = nil,
+        center: FocusPoint? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.clusterId = clusterId
+        self.bbox = bbox
+        self.center = center
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, bbox, center
+        case clusterId = "cluster_id"
+    }
+}
+
 package struct SceneRecord: Codable, Sendable {
     package var sceneIndex: Int
     package var startTime: Double
@@ -245,6 +296,8 @@ package struct SceneRecord: Codable, Sendable {
     package var description: String
     package var tags: [String]?
     package var sceneType: String?
+    package var focusPoint: FocusPoint?
+    package var subjects: [Subject]?
 
     package init(
         sceneIndex: Int,
@@ -252,7 +305,9 @@ package struct SceneRecord: Codable, Sendable {
         endTime: Double,
         description: String,
         tags: [String]? = nil,
-        sceneType: String? = nil
+        sceneType: String? = nil,
+        focusPoint: FocusPoint? = nil,
+        subjects: [Subject]? = nil
     ) {
         self.sceneIndex = sceneIndex
         self.startTime = startTime
@@ -260,6 +315,8 @@ package struct SceneRecord: Codable, Sendable {
         self.description = description
         self.tags = tags
         self.sceneType = sceneType
+        self.focusPoint = focusPoint
+        self.subjects = subjects
     }
 
     enum CodingKeys: String, CodingKey {
@@ -268,6 +325,82 @@ package struct SceneRecord: Codable, Sendable {
         case endTime = "end_time"
         case description, tags
         case sceneType = "scene_type"
+        case focusPoint = "focus_point"
+        case subjects
+    }
+}
+
+// MARK: - Face detection sidecar (faces.json)
+
+package struct FaceDetection: Codable, Sendable {
+    package let bbox: BoundingBox
+    package let center: FocusPoint
+    package let confidence: Double
+
+    package init(bbox: BoundingBox, center: FocusPoint, confidence: Double) {
+        self.bbox = bbox
+        self.center = center
+        self.confidence = confidence
+    }
+}
+
+package struct FrameFaceDetection: Codable, Sendable {
+    package let time: Double
+    package let faces: [FaceDetection]
+
+    package init(time: Double, faces: [FaceDetection]) {
+        self.time = time
+        self.faces = faces
+    }
+}
+
+package struct FaceCluster: Codable, Sendable {
+    package let id: Int
+    package let medianCenter: FocusPoint
+    package let medianBbox: BoundingBox
+    package let visibility: Double
+    package let frameCount: Int
+
+    package init(id: Int, medianCenter: FocusPoint, medianBbox: BoundingBox, visibility: Double, frameCount: Int) {
+        self.id = id
+        self.medianCenter = medianCenter
+        self.medianBbox = medianBbox
+        self.visibility = visibility
+        self.frameCount = frameCount
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case medianCenter = "median_center"
+        case medianBbox = "median_bbox"
+        case visibility
+        case frameCount = "frame_count"
+    }
+}
+
+package struct FaceDetectionResult: Codable, Sendable {
+    package let source: String
+    package let sampleFps: Double
+    package let durationSeconds: Double
+    package let frameCount: Int
+    package let frames: [FrameFaceDetection]
+    package let clusters: [FaceCluster]
+
+    package init(source: String, sampleFps: Double, durationSeconds: Double, frameCount: Int, frames: [FrameFaceDetection], clusters: [FaceCluster]) {
+        self.source = source
+        self.sampleFps = sampleFps
+        self.durationSeconds = durationSeconds
+        self.frameCount = frameCount
+        self.frames = frames
+        self.clusters = clusters
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case source
+        case sampleFps = "sample_fps"
+        case durationSeconds = "duration_seconds"
+        case frameCount = "frame_count"
+        case frames, clusters
     }
 }
 

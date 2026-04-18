@@ -63,6 +63,10 @@ package struct DataPaths: Sendable {
         projectDir(project).appendingPathComponent("\(source).scenes.json")
     }
 
+    package func analysisFaces(project: String, source: String) -> URL {
+        projectDir(project).appendingPathComponent("\(source).faces.json")
+    }
+
     package func renderFile(project: String, render: String) -> URL {
         projectDir(project).appendingPathComponent("\(render).render.md")
     }

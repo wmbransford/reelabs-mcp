@@ -19,7 +19,7 @@ final class CompositionBuilder: Sendable {
         let composition = AVMutableComposition()
 
         // Two video + audio tracks enable crossfade transitions.
-        // Segments alternate between tracks; overlap regions create the blend.
+        // Segments stay on one track by default; crossfades swap tracks to overlap.
         guard let videoTrackA = composition.addMutableTrack(
             withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
         ), let videoTrackB = composition.addMutableTrack(
@@ -93,7 +93,7 @@ final class CompositionBuilder: Sendable {
         // Use explicit fps > source fps > 30 fallback
         let fps = spec.fps ?? (sourceFps > 0 ? sourceFps : 30.0)
 
-        // --- Pass 1: Insert media onto alternating tracks ---
+        // --- Pass 1: Insert media onto tracks ---
 
         struct KeyframeLayout {
             let relativeTime: Double    // seconds relative to segment start
@@ -115,6 +115,7 @@ final class CompositionBuilder: Sendable {
 
         var layouts: [SegmentLayout] = []
         var insertionTime = CMTime.zero
+        var previousTrackIdx = 0
 
         for (index, segment) in spec.segments.enumerated() {
             guard let asset = sourceAssets[segment.sourceId] else {
@@ -150,7 +151,17 @@ final class CompositionBuilder: Sendable {
                 transitionDur = .zero
             }
 
-            let trackIdx = index % 2
+            // Hard cuts stay on the same track; crossfades swap so two tracks can overlap.
+            let trackIdx: Int
+            if index == 0 {
+                trackIdx = 0
+            } else if CMTimeGetSeconds(transitionDur) > 0 {
+                trackIdx = 1 - previousTrackIdx
+            } else {
+                trackIdx = previousTrackIdx
+            }
+            previousTrackIdx = trackIdx
+
             let vTrack = videoTracks[trackIdx]
             let aTrack = audioTracks[trackIdx]
 

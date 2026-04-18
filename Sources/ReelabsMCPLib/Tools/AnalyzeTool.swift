@@ -5,7 +5,7 @@ import MCP
 package enum AnalyzeTool {
     package static let tool = Tool(
         name: "reelabs_analyze",
-        description: "Analyze video visually. Actions: extract (path, sample_fps? — extracts frames to disk), store (analysis_id, scenes[] — persist sub-agent scene analysis), get (analysis_id — retrieve analysis + scenes). analysis_id is a compound 'project/source' string.",
+        description: "Analyze video visually. Actions: extract (path, sample_fps?, face_backend?, face_sample_fps? — extracts frames to disk and optionally runs Apple Vision face detection), store (analysis_id, scenes[] — persist sub-agent scene analysis), get (analysis_id — retrieve analysis + scenes + face clusters). analysis_id is a compound 'project/source' string.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
@@ -20,7 +20,16 @@ package enum AnalyzeTool {
                 ]),
                 "sample_fps": .object([
                     "type": .string("number"),
-                    "description": .string("Frames per second to sample (default: 1.0)")
+                    "description": .string("Frames per second to sample for JPEG extraction (default: 1.0). This is the agent-readable sample rate.")
+                ]),
+                "face_backend": .object([
+                    "type": .string("string"),
+                    "description": .string("Face detection backend: 'vision' (Apple Vision, default — deterministic, fast, runs straight from the video) or 'claude' (agent-only, legacy)."),
+                    "enum": .array([.string("vision"), .string("claude")])
+                ]),
+                "face_sample_fps": .object([
+                    "type": .string("number"),
+                    "description": .string("Sample rate (fps) for Apple Vision face detection, independent of JPEG sample_fps (default: 2.0). Denser = tighter gesture tracking at render time.")
                 ]),
                 "project": .object([
                     "type": .string("string"),
@@ -40,7 +49,42 @@ package enum AnalyzeTool {
                             "end_time": .object(["type": .string("number")]),
                             "description": .object(["type": .string("string")]),
                             "tags": .object(["type": .string("array"), "items": .object(["type": .string("string")])]),
-                            "scene_type": .object(["type": .string("string")])
+                            "scene_type": .object(["type": .string("string")]),
+                            "focus_point": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "x": .object(["type": .string("number")]),
+                                    "y": .object(["type": .string("number")])
+                                ])
+                            ]),
+                            "subjects": .object([
+                                "type": .string("array"),
+                                "description": .string("Optional. Named subjects present in the scene, referencing face clusters by cluster_id."),
+                                "items": .object([
+                                    "type": .string("object"),
+                                    "properties": .object([
+                                        "id": .object(["type": .string("integer")]),
+                                        "name": .object(["type": .string("string")]),
+                                        "cluster_id": .object(["type": .string("integer")]),
+                                        "bbox": .object([
+                                            "type": .string("object"),
+                                            "properties": .object([
+                                                "x": .object(["type": .string("number")]),
+                                                "y": .object(["type": .string("number")]),
+                                                "w": .object(["type": .string("number")]),
+                                                "h": .object(["type": .string("number")])
+                                            ])
+                                        ]),
+                                        "center": .object([
+                                            "type": .string("object"),
+                                            "properties": .object([
+                                                "x": .object(["type": .string("number")]),
+                                                "y": .object(["type": .string("number")])
+                                            ])
+                                        ])
+                                    ])
+                                ])
+                            ])
                         ])
                     ])
                 ])
@@ -90,12 +134,13 @@ package enum AnalyzeTool {
         }
 
         let sampleFps = extractDouble(arguments?["sample_fps"]) ?? 1.0
+        let faceBackend = arguments?["face_backend"]?.stringValue ?? "vision"
+        let faceSampleFps = extractDouble(arguments?["face_sample_fps"]) ?? 2.0
         let projectSlug = arguments?["project"]?.stringValue ?? DataPaths.deriveProjectSlug(fromSourcePath: path)
         let sourceSlug = DataPaths.deriveSourceSlug(fromSourcePath: path)
 
         _ = try projectStore.createWithSlug(slug: projectSlug)
 
-        // Duration probe
         let asset = AVURLAsset(url: URL(fileURLWithPath: path))
         let duration = try await asset.load(.duration)
         let durationSeconds = CMTimeGetSeconds(duration)
@@ -108,6 +153,14 @@ package enum AnalyzeTool {
             sampleFps: sampleFps,
             outputDir: framesDir
         )
+
+        var faceResult: FaceDetectionResult?
+        if faceBackend == "vision" {
+            faceResult = try await FaceDetector.detect(videoPath: path, sampleFps: faceSampleFps)
+            if let result = faceResult {
+                try analysisStore.storeFaces(project: projectSlug, source: sourceSlug, result: result)
+            }
+        }
 
         var record = AnalysisRecord(
             slug: sourceSlug,
@@ -126,10 +179,96 @@ package enum AnalyzeTool {
             ["time": frame.time, "path": frame.path] as [String: Any]
         }
 
-        let instructions = """
+        let instructions = buildInstructions(
+            analysisId: analysisId,
+            sampleFps: sampleFps,
+            durationSeconds: durationSeconds,
+            faceResult: faceResult
+        )
+
+        var response: [String: Any] = [
+            "analysis_id": analysisId,
+            "project": projectSlug,
+            "source": sourceSlug,
+            "duration_seconds": (durationSeconds * 10).rounded() / 10,
+            "frame_count": frames.count,
+            "sample_fps": sampleFps,
+            "face_backend": faceBackend,
+            "frames_dir": framesDir.path,
+            "frames": framesJson,
+            "instructions": instructions
+        ]
+
+        if let result = faceResult {
+            response["face_sample_fps"] = result.sampleFps
+            response["face_frame_count"] = result.frameCount
+            response["face_clusters"] = result.clusters.map { cluster -> [String: Any] in
+                [
+                    "id": cluster.id,
+                    "median_center": ["x": cluster.medianCenter.x, "y": cluster.medianCenter.y],
+                    "median_bbox": [
+                        "x": cluster.medianBbox.x,
+                        "y": cluster.medianBbox.y,
+                        "w": cluster.medianBbox.w,
+                        "h": cluster.medianBbox.h
+                    ],
+                    "visibility": cluster.visibility,
+                    "frame_count": cluster.frameCount
+                ]
+            }
+        }
+
+        let jsonData = try safeJSONData(from: response)
+        return .init(content: [.text(text: String(data: jsonData, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
+    }
+
+    private static func buildInstructions(
+        analysisId: String,
+        sampleFps: Double,
+        durationSeconds: Double,
+        faceResult: FaceDetectionResult?
+    ) -> String {
+        let durationStr = String(format: "%.1f", (durationSeconds * 10).rounded() / 10)
+
+        if let result = faceResult, !result.clusters.isEmpty {
+            let clustersSummary = result.clusters.map { cluster -> String in
+                let x = String(format: "%.2f", cluster.medianCenter.x)
+                let y = String(format: "%.2f", cluster.medianCenter.y)
+                let vis = String(format: "%.0f", cluster.visibility * 100)
+                return "  - cluster \(cluster.id): face center ~(\(x), \(y)), visible in \(vis)% of \(result.frameCount) sampled frames"
+            }.joined(separator: "\n")
+
+            return """
+            VISUAL ANALYSIS INSTRUCTIONS (Vision-assisted)
+
+            Apple Vision pre-detected face clusters across the full video (sampled at \(result.sampleFps) fps). These positions are ground truth — do not re-estimate face coordinates.
+
+            \(clustersSummary)
+
+            JPEG frames for your semantic review were extracted at \(sampleFps) fps (\(durationStr)s total). They are a temporal sequence — analyze them as video.
+
+            YOUR JOB:
+            1. Scan the extracted JPEG frames in order. Identify where visual content meaningfully changes — these are scene boundaries. Consecutive frames with the same composition = ONE scene.
+            2. For each scene, identify which face clusters appear in it (by id). Name each one when the transcript or visual context makes identity clear; leave `name` null otherwise.
+            3. Describe each scene briefly (1–2 sentences) and classify scene_type.
+
+            WHAT TO OUTPUT:
+            Call reelabs_analyze with action "store" and analysis_id "\(analysisId)". Each scene has:
+            - start_time, end_time: scene boundaries in seconds
+            - description: 1–2 sentences
+            - scene_type: one of "talking_head", "b_roll", "screen_recording", "title_card", "transition", "demo", "interview", "other"
+            - tags: short descriptive tags
+            - subjects: array of { id, name?, cluster_id, bbox?, center? }. Reference the clusters above by cluster_id. Copy bbox/center from the cluster's median values or omit (downstream reads the cluster record).
+            - focus_point: optional single {x, y}. Omit when the scene has multiple subjects — prefer the `subjects` array.
+
+            Coords are top-left normalized 0–1 (0,0 = top-left corner).
+            """
+        }
+
+        return """
         VISUAL ANALYSIS INSTRUCTIONS
 
-        These are sequential frames extracted from a video at \(sampleFps) fps (\(String(format: "%.1f", (durationSeconds * 10).rounded() / 10))s total). \
+        These are sequential frames extracted from a video at \(sampleFps) fps (\(durationStr)s total). \
         They are a temporal sequence — not independent images. Analyze them as a video.
 
         HOW TO ANALYZE:
@@ -149,22 +288,13 @@ package enum AnalyzeTool {
         - scene_type: one of "talking_head", "b_roll", "screen_recording", "title_card", \
         "transition", "demo", "interview", "other"
         - tags: short descriptive tags for searchability
+        - focus_point: optional {x, y} in normalized 0-1 coordinates (0,0 = top-left) marking \
+        the primary visual subject in the scene's first frame. If the primary subject is a \
+        person, the focus point is their FACE — not their torso, shoulders, or the center of \
+        their body. For scenes with multiple people, pick the active speaker or the most \
+        prominent face. For b-roll, title cards, or scenes with no clear subject, omit the \
+        field (or set to {0.5, 0.5} for dead center).
         """
-
-        let response: [String: Any] = [
-            "analysis_id": analysisId,
-            "project": projectSlug,
-            "source": sourceSlug,
-            "duration_seconds": (durationSeconds * 10).rounded() / 10,
-            "frame_count": frames.count,
-            "sample_fps": sampleFps,
-            "frames_dir": framesDir.path,
-            "frames": framesJson,
-            "instructions": instructions
-        ]
-
-        let jsonData = try safeJSONData(from: response)
-        return .init(content: [.text(text: String(data: jsonData, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
     }
 
     private static func handleStore(arguments: [String: Value]?, store: AnalysisStore) throws -> CallTool.Result {
@@ -196,13 +326,24 @@ package enum AnalyzeTool {
                 tags = nil
             }
             let sceneType = sceneValue.objectValue?["scene_type"]?.stringValue
+            let focusPoint: FocusPoint?
+            if let fp = sceneValue.objectValue?["focus_point"]?.objectValue,
+               let fx = extractDouble(fp["x"]),
+               let fy = extractDouble(fp["y"]) {
+                focusPoint = FocusPoint(x: fx, y: fy)
+            } else {
+                focusPoint = nil
+            }
+            let subjects: [Subject]? = parseSubjects(sceneValue.objectValue?["subjects"]?.arrayValue)
             scenes.append(SceneRecord(
                 sceneIndex: index,
                 startTime: startTime,
                 endTime: endTime,
                 description: description,
                 tags: tags,
-                sceneType: sceneType
+                sceneType: sceneType,
+                focusPoint: focusPoint,
+                subjects: subjects
             ))
         }
 
@@ -238,10 +379,16 @@ package enum AnalyzeTool {
             ]
             if let tags = scene.tags { dict["tags"] = tags }
             if let sceneType = scene.sceneType { dict["scene_type"] = sceneType }
+            if let fp = scene.focusPoint {
+                dict["focus_point"] = ["x": fp.x, "y": fp.y]
+            }
+            if let subjects = scene.subjects {
+                dict["subjects"] = subjects.map { subjectDict($0) }
+            }
             return dict
         }
 
-        let response: [String: Any] = [
+        var response: [String: Any] = [
             "analysis_id": id,
             "project": parts.project,
             "source": parts.source,
@@ -254,7 +401,70 @@ package enum AnalyzeTool {
             "frames_dir": analysis.framesDir,
             "scenes": scenesJson
         ]
+
+        if let faces = try store.getFaces(project: parts.project, source: parts.source) {
+            response["face_sample_fps"] = faces.sampleFps
+            response["face_frame_count"] = faces.frameCount
+            response["face_clusters"] = faces.clusters.map { cluster -> [String: Any] in
+                [
+                    "id": cluster.id,
+                    "median_center": ["x": cluster.medianCenter.x, "y": cluster.medianCenter.y],
+                    "median_bbox": [
+                        "x": cluster.medianBbox.x,
+                        "y": cluster.medianBbox.y,
+                        "w": cluster.medianBbox.w,
+                        "h": cluster.medianBbox.h
+                    ],
+                    "visibility": cluster.visibility,
+                    "frame_count": cluster.frameCount
+                ]
+            }
+        }
+
         let data = try safeJSONData(from: response)
         return .init(content: [.text(text: String(data: data, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
+    }
+
+    private static func parseSubjects(_ array: [Value]?) -> [Subject]? {
+        guard let array else { return nil }
+        var subjects: [Subject] = []
+        for (idx, val) in array.enumerated() {
+            guard let obj = val.objectValue else { continue }
+            let id = Int(extractDouble(obj["id"]) ?? Double(idx))
+            let name = obj["name"]?.stringValue
+            let clusterId: Int? = {
+                if let c = extractDouble(obj["cluster_id"]) { return Int(c) }
+                return nil
+            }()
+            let bbox: BoundingBox? = {
+                guard let b = obj["bbox"]?.objectValue,
+                      let x = extractDouble(b["x"]),
+                      let y = extractDouble(b["y"]),
+                      let w = extractDouble(b["w"]),
+                      let h = extractDouble(b["h"]) else { return nil }
+                return BoundingBox(x: x, y: y, w: w, h: h)
+            }()
+            let center: FocusPoint? = {
+                guard let c = obj["center"]?.objectValue,
+                      let cx = extractDouble(c["x"]),
+                      let cy = extractDouble(c["y"]) else { return nil }
+                return FocusPoint(x: cx, y: cy)
+            }()
+            subjects.append(Subject(id: id, name: name, clusterId: clusterId, bbox: bbox, center: center))
+        }
+        return subjects.isEmpty ? nil : subjects
+    }
+
+    private static func subjectDict(_ s: Subject) -> [String: Any] {
+        var dict: [String: Any] = ["id": s.id]
+        if let name = s.name { dict["name"] = name }
+        if let clusterId = s.clusterId { dict["cluster_id"] = clusterId }
+        if let bbox = s.bbox {
+            dict["bbox"] = ["x": bbox.x, "y": bbox.y, "w": bbox.w, "h": bbox.h]
+        }
+        if let center = s.center {
+            dict["center"] = ["x": center.x, "y": center.y]
+        }
+        return dict
     }
 }

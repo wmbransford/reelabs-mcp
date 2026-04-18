@@ -49,4 +49,19 @@ package struct AnalysisStore: Sendable {
         let data = try Data(contentsOf: scenesURL)
         return try JSONDecoder().decode([SceneRecord].self, from: data)
     }
+
+    package func storeFaces(project: String, source: String, result: FaceDetectionResult) throws {
+        let url = paths.analysisFaces(project: project, source: source)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        let data = try encoder.encode(result)
+        try MarkdownStore.writeData(data, to: url)
+    }
+
+    package func getFaces(project: String, source: String) throws -> FaceDetectionResult? {
+        let url = paths.analysisFaces(project: project, source: source)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let data = try Data(contentsOf: url)
+        return try JSONDecoder().decode(FaceDetectionResult.self, from: data)
+    }
 }

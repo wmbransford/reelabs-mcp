@@ -93,16 +93,7 @@ enum CaptionLayer {
                 let groupStartFrac = max(startSec / totalDuration, 0)
                 let groupEndFrac = min(max(endSec / totalDuration, groupStartFrac + 0.0001), 1.0)
 
-                // Measure full group text for centering
                 let fullText = group.map { formatWord($0.word, allCaps: allCaps, stripPunctuation: stripPunctuation) }.joined(separator: " ")
-                let fullSize = measureText(fullText, font: font, shadow: shadow, maxWidth: maxWidth)
-
-                let layerX = (videoSize.width - fullSize.width) / 2
-                // position is measured from top (e.g. 70% = 70% down from top).
-                // Parent has isGeometryFlipped=true, so Y increases downward.
-                // Pin the BOTTOM of the text block to `position` so wrapping grows
-                // upward — keeps the visible baseline consistent across groups.
-                let layerY = position - fullSize.height
 
                 if hasHighlight {
                     // Word-by-word highlight with automatic line wrapping
@@ -118,11 +109,13 @@ enum CaptionLayer {
                     var renders: [WordRender] = []
                     for wordData in group {
                         let wordText = formatWord(wordData.word, allCaps: allCaps, stripPunctuation: stripPunctuation)
+                        let naturalWidth = measureText(wordText, font: font, shadow: shadow, maxWidth: .greatestFiniteMagnitude).width
+                        let wordFont = shrinkFontToFit(naturalWidth: naturalWidth, font: font, maxWidth: maxWidth, shadow: shadow)
                         guard let (baseImage, baseSize) = renderTextToImage(
-                            text: wordText, font: font, color: textColor, shadow: shadow, maxWidth: maxWidth
+                            text: wordText, font: wordFont, color: textColor, shadow: shadow, maxWidth: maxWidth
                         ) else { continue }
                         let hlImage = renderTextToImage(
-                            text: wordText, font: font, color: highlightColor, shadow: shadow, maxWidth: maxWidth
+                            text: wordText, font: wordFont, color: highlightColor, shadow: shadow, maxWidth: maxWidth
                         )?.0
                         renders.append(WordRender(wordData: wordData, baseImage: baseImage, baseSize: baseSize, hlImage: hlImage))
                     }
@@ -190,13 +183,23 @@ enum CaptionLayer {
                         }
                     }
                 } else {
-                    // Simple mode — full group text as one image
+                    // Simple mode — full group text as one image. Shrink so the
+                    // longest single word fits; line-wrapping handles the rest.
+                    let maxWordWidth = group.reduce(CGFloat(0)) { acc, w in
+                        let formatted = formatWord(w.word, allCaps: allCaps, stripPunctuation: stripPunctuation)
+                        return max(acc, measureText(formatted, font: font, shadow: shadow, maxWidth: .greatestFiniteMagnitude).width)
+                    }
+                    let groupFont = shrinkFontToFit(naturalWidth: maxWordWidth, font: font, maxWidth: maxWidth, shadow: shadow)
+                    let groupFullSize = measureText(fullText, font: groupFont, shadow: shadow, maxWidth: maxWidth)
                     guard let (image, imgSize) = renderTextToImage(
-                        text: fullText, font: font, color: textColor, shadow: shadow, maxWidth: maxWidth
+                        text: fullText, font: groupFont, color: textColor, shadow: shadow, maxWidth: maxWidth
                     ) else { return }
 
+                    let groupLayerX = (videoSize.width - groupFullSize.width) / 2
+                    let groupLayerY = position - groupFullSize.height
+
                     let textLayer = CALayer()
-                    textLayer.frame = CGRect(x: layerX, y: layerY, width: imgSize.width, height: imgSize.height)
+                    textLayer.frame = CGRect(x: groupLayerX, y: groupLayerY, width: imgSize.width, height: imgSize.height)
                     textLayer.contents = image
 
                     addVisibilityAnimation(
@@ -281,11 +284,13 @@ enum CaptionLayer {
                     var renders: [WordRender] = []
                     for wordData in group {
                         let wordText = formatWord(wordData.word, allCaps: allCaps, stripPunctuation: stripPunctuation)
+                        let naturalWidth = measureText(wordText, font: font, shadow: shadow, maxWidth: .greatestFiniteMagnitude).width
+                        let wordFont = shrinkFontToFit(naturalWidth: naturalWidth, font: font, maxWidth: maxWidth, shadow: shadow)
                         guard let (baseImage, baseSize) = renderTextToImage(
-                            text: wordText, font: font, color: textColor, shadow: shadow, maxWidth: maxWidth
+                            text: wordText, font: wordFont, color: textColor, shadow: shadow, maxWidth: maxWidth
                         ) else { continue }
                         let hlImage = renderTextToImage(
-                            text: wordText, font: font, color: highlightColor, shadow: shadow, maxWidth: maxWidth
+                            text: wordText, font: wordFont, color: highlightColor, shadow: shadow, maxWidth: maxWidth
                         )?.0
                         renders.append(WordRender(wordData: wordData, baseImage: baseImage, baseSize: baseSize, hlImage: hlImage))
                     }
@@ -352,12 +357,18 @@ enum CaptionLayer {
                         }
                     }
                 } else {
-                    // Simple mode — full group text as one image
+                    // Simple mode — full group text as one image. Shrink so the
+                    // longest single word fits; line-wrapping handles the rest.
                     let fullText = group.map { formatWord($0.word, allCaps: allCaps, stripPunctuation: stripPunctuation) }.joined(separator: " ")
-                    let fullSize = measureText(fullText, font: font, shadow: shadow, maxWidth: maxWidth)
+                    let maxWordWidth = group.reduce(CGFloat(0)) { acc, w in
+                        let formatted = formatWord(w.word, allCaps: allCaps, stripPunctuation: stripPunctuation)
+                        return max(acc, measureText(formatted, font: font, shadow: shadow, maxWidth: .greatestFiniteMagnitude).width)
+                    }
+                    let groupFont = shrinkFontToFit(naturalWidth: maxWordWidth, font: font, maxWidth: maxWidth, shadow: shadow)
+                    let fullSize = measureText(fullText, font: groupFont, shadow: shadow, maxWidth: maxWidth)
 
                     guard let (image, imgSize) = renderTextToImage(
-                        text: fullText, font: font, color: textColor, shadow: shadow, maxWidth: maxWidth
+                        text: fullText, font: groupFont, color: textColor, shadow: shadow, maxWidth: maxWidth
                     ) else { return }
 
                     let layerX = (videoSize.width - fullSize.width) / 2
@@ -438,6 +449,24 @@ enum CaptionLayer {
             options: [.usesLineFragmentOrigin],
             attributes: attributes
         ).size
+    }
+
+    /// Returns a font scaled down so a piece of text whose natural (unwrapped) width
+    /// is `naturalWidth` will produce an image that fits within `maxWidth`. Accounts
+    /// for the padding added by `renderTextToImage`. Returns the original font when
+    /// it already fits — there is no minimum floor; very long single tokens may
+    /// shrink considerably.
+    private static func shrinkFontToFit(
+        naturalWidth: CGFloat,
+        font: CTFont,
+        maxWidth: CGFloat,
+        shadow: Bool
+    ) -> CTFont {
+        let padding: CGFloat = shadow ? 12 : 4
+        let availableWidth = maxWidth - padding * 2
+        guard availableWidth > 0, naturalWidth > availableWidth, naturalWidth > 0 else { return font }
+        let scale = availableWidth / naturalWidth
+        return CTFontCreateCopyWithAttributes(font, CTFontGetSize(font) * scale, nil, nil)
     }
 
     private static func textAttributes(font: CTFont, color: CGColor, shadow: Bool) -> [NSAttributedString.Key: Any] {

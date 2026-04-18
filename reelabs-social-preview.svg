@@ -1,0 +1,14 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1280" height="640" fill="#faf9f5"/>
+  <g transform="translate(290 170) scale(16.6667)" fill="#d97757" stroke="#d97757">
+    <path d="M1 6.5 L3.5 6.5 C5.5 6.5 7.5 4.5 9.5 4.5 C11.5 4.5 13.5 3 15.5 3 C17.5 3 19.5 5.5 21.5 5.5 C23.5 5.5 25.5 8.5 27.5 8.5 C29.5 8.5 31.5 9.5 33.5 9.5 C35.5 9.5 37.5 7 39.5 7 L41 7" fill="none" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M1 11.5 L3.5 11.5 C5.5 11.5 7.5 9.5 9.5 9.5 C11.5 9.5 13.5 8 15.5 8 C17.5 8 19.5 10.5 21.5 10.5 C23.5 10.5 25.5 13.5 27.5 13.5 C29.5 13.5 31.5 14.5 33.5 14.5 C35.5 14.5 37.5 12 39.5 12 L41 12" fill="none" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="2" y="6.5" width="3" height="5" rx="0.8" stroke="none"/>
+    <rect x="8" y="4.5" width="3" height="5" rx="0.8" stroke="none"/>
+    <rect x="14" y="3" width="3" height="5" rx="0.8" stroke="none"/>
+    <rect x="20" y="5.5" width="3" height="5" rx="0.8" stroke="none"/>
+    <rect x="26" y="8.5" width="3" height="5" rx="0.8" stroke="none"/>
+    <rect x="32" y="9.5" width="3" height="5" rx="0.8" stroke="none"/>
+    <rect x="38" y="7" width="3" height="5" rx="0.8" stroke="none"/>
+  </g>
+</svg>
