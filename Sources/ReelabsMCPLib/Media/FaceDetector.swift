@@ -21,10 +21,10 @@ package enum FaceDetector {
     private static let clusterVisibilityFloor: Double = 0.02
 
     /// Max center-distance (in normalized image width) for a face to join an
-    /// existing cluster. 0.1 ≈ 10% of the frame; tighter than this splits a
-    /// single host into multiple clusters when they lean; looser this merges
-    /// two adjacent speakers on a tight two-shot.
-    private static let clusterMergeThreshold: Double = 0.1
+    /// existing cluster. 0.15 ≈ 15% of the frame: loose enough to keep a single
+    /// host as one cluster when they lean forward / sit back over a long take,
+    /// tight enough to keep two adjacent hosts on a tight two-shot distinct.
+    private static let clusterMergeThreshold: Double = 0.15
 
     package static func detect(
         videoPath: String,
@@ -42,6 +42,7 @@ package enum FaceDetector {
         generator.appliesPreferredTrackTransform = true
         generator.requestedTimeToleranceBefore = CMTime(seconds: 0.05, preferredTimescale: 600)
         generator.requestedTimeToleranceAfter = CMTime(seconds: 0.05, preferredTimescale: 600)
+        generator.maximumSize = CGSize(width: 960, height: 960)
 
         let interval = 1.0 / sampleFps
         var times: [CMTime] = []

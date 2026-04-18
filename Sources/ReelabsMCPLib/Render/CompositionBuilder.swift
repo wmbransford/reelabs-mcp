@@ -589,9 +589,18 @@ final class CompositionBuilder: Sendable {
                             layout.compositionStart,
                             CMTime(seconds: kfs[i + 1].relativeTime, preferredTimescale: 600)
                         )
-                        // Clamp to pass-through bounds
-                        let clampedStart = CMTimeMaximum(kfStart, passStart)
-                        let clampedEnd = CMTimeMinimum(kfEnd, passEnd)
+                        // Clamp to pass-through bounds. Pin the first/last
+                        // keyframe of each segment exactly to passStart/passEnd
+                        // — Double-rounded keyframe times can otherwise sit one
+                        // CMTime tick inside the segment boundary, leaving a
+                        // sub-millisecond gap between consecutive segments'
+                        // instructions that AVFoundation rejects (-11841).
+                        let clampedStart = (i == 0)
+                            ? passStart
+                            : CMTimeMaximum(kfStart, passStart)
+                        let clampedEnd = (i + 1 == kfs.count - 1)
+                            ? passEnd
+                            : CMTimeMinimum(kfEnd, passEnd)
                         let clampedDur = CMTimeSubtract(clampedEnd, clampedStart)
                         guard CMTimeGetSeconds(clampedDur) > 0 else { continue }
 

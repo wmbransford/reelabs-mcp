@@ -5,7 +5,7 @@ import MCP
 package enum AnalyzeTool {
     package static let tool = Tool(
         name: "reelabs_analyze",
-        description: "Analyze video visually. Actions: extract (path, sample_fps?, face_backend?, face_sample_fps? — extracts frames to disk and optionally runs Apple Vision face detection), store (analysis_id, scenes[] — persist sub-agent scene analysis), get (analysis_id — retrieve analysis + scenes + face clusters). analysis_id is a compound 'project/source' string.",
+        description: "Analyze video visually. Actions: extract (path, sample_fps?, face_backend?, face_sample_fps? — extracts frames to disk and optionally runs Apple Vision face detection), store (analysis_id, scenes[] — persist sub-agent scene analysis), get (analysis_id — retrieve analysis + scenes + face positions). analysis_id is a compound 'project/source' string.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
@@ -57,34 +57,6 @@ package enum AnalyzeTool {
                                     "y": .object(["type": .string("number")])
                                 ])
                             ]),
-                            "subjects": .object([
-                                "type": .string("array"),
-                                "description": .string("Optional. Named subjects present in the scene, referencing face clusters by cluster_id."),
-                                "items": .object([
-                                    "type": .string("object"),
-                                    "properties": .object([
-                                        "id": .object(["type": .string("integer")]),
-                                        "name": .object(["type": .string("string")]),
-                                        "cluster_id": .object(["type": .string("integer")]),
-                                        "bbox": .object([
-                                            "type": .string("object"),
-                                            "properties": .object([
-                                                "x": .object(["type": .string("number")]),
-                                                "y": .object(["type": .string("number")]),
-                                                "w": .object(["type": .string("number")]),
-                                                "h": .object(["type": .string("number")])
-                                            ])
-                                        ]),
-                                        "center": .object([
-                                            "type": .string("object"),
-                                            "properties": .object([
-                                                "x": .object(["type": .string("number")]),
-                                                "y": .object(["type": .string("number")])
-                                            ])
-                                        ])
-                                    ])
-                                ])
-                            ])
                         ])
                     ])
                 ])
@@ -231,26 +203,26 @@ package enum AnalyzeTool {
         let durationStr = String(format: "%.1f", (durationSeconds * 10).rounded() / 10)
 
         if let result = faceResult, !result.clusters.isEmpty {
-            let clustersSummary = result.clusters.map { cluster -> String in
+            let positionsSummary = result.clusters.map { cluster -> String in
                 let x = String(format: "%.2f", cluster.medianCenter.x)
                 let y = String(format: "%.2f", cluster.medianCenter.y)
                 let vis = String(format: "%.0f", cluster.visibility * 100)
-                return "  - cluster \(cluster.id): face center ~(\(x), \(y)), visible in \(vis)% of \(result.frameCount) sampled frames"
+                return "  - face position (\(x), \(y)) — seen in \(vis)% of sampled frames"
             }.joined(separator: "\n")
 
             return """
             VISUAL ANALYSIS INSTRUCTIONS (Vision-assisted)
 
-            Apple Vision pre-detected face clusters across the full video (sampled at \(result.sampleFps) fps). These positions are ground truth — do not re-estimate face coordinates.
+            Apple Vision pre-detected these distinct face positions across the video (sampled at \(result.sampleFps) fps). These positions are ground truth — do not re-estimate face coordinates:
 
-            \(clustersSummary)
+            \(positionsSummary)
 
             JPEG frames for your semantic review were extracted at \(sampleFps) fps (\(durationStr)s total). They are a temporal sequence — analyze them as video.
 
             YOUR JOB:
             1. Scan the extracted JPEG frames in order. Identify where visual content meaningfully changes — these are scene boundaries. Consecutive frames with the same composition = ONE scene.
-            2. For each scene, identify which face clusters appear in it (by id). Name each one when the transcript or visual context makes identity clear; leave `name` null otherwise.
-            3. Describe each scene briefly (1–2 sentences) and classify scene_type.
+            2. For each scene, describe it briefly (1–2 sentences) and classify scene_type.
+            3. For each scene with a human subject, pick the face position from the list above that is the subject of that scene (the speaker, the one in motion, the dominant face). Copy its (x, y) into `focus_point`. For b-roll, title cards, or scenes with no face subject, omit `focus_point`.
 
             WHAT TO OUTPUT:
             Call reelabs_analyze with action "store" and analysis_id "\(analysisId)". Each scene has:
@@ -258,10 +230,9 @@ package enum AnalyzeTool {
             - description: 1–2 sentences
             - scene_type: one of "talking_head", "b_roll", "screen_recording", "title_card", "transition", "demo", "interview", "other"
             - tags: short descriptive tags
-            - subjects: array of { id, name?, cluster_id, bbox?, center? }. Reference the clusters above by cluster_id. Copy bbox/center from the cluster's median values or omit (downstream reads the cluster record).
-            - focus_point: optional single {x, y}. Omit when the scene has multiple subjects — prefer the `subjects` array.
+            - focus_point: optional {x, y} — the face position from the list above that is the subject of this scene. Omit for scenes with no face subject.
 
-            Coords are top-left normalized 0–1 (0,0 = top-left corner).
+            Coords are top-left normalized 0–1 (0,0 = top-left corner). Do NOT output names, cluster IDs, or per-subject arrays — just the focus_point.
             """
         }
 
@@ -334,7 +305,6 @@ package enum AnalyzeTool {
             } else {
                 focusPoint = nil
             }
-            let subjects: [Subject]? = parseSubjects(sceneValue.objectValue?["subjects"]?.arrayValue)
             scenes.append(SceneRecord(
                 sceneIndex: index,
                 startTime: startTime,
@@ -342,8 +312,7 @@ package enum AnalyzeTool {
                 description: description,
                 tags: tags,
                 sceneType: sceneType,
-                focusPoint: focusPoint,
-                subjects: subjects
+                focusPoint: focusPoint
             ))
         }
 
@@ -381,9 +350,6 @@ package enum AnalyzeTool {
             if let sceneType = scene.sceneType { dict["scene_type"] = sceneType }
             if let fp = scene.focusPoint {
                 dict["focus_point"] = ["x": fp.x, "y": fp.y]
-            }
-            if let subjects = scene.subjects {
-                dict["subjects"] = subjects.map { subjectDict($0) }
             }
             return dict
         }
@@ -425,46 +391,4 @@ package enum AnalyzeTool {
         return .init(content: [.text(text: String(data: data, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
     }
 
-    private static func parseSubjects(_ array: [Value]?) -> [Subject]? {
-        guard let array else { return nil }
-        var subjects: [Subject] = []
-        for (idx, val) in array.enumerated() {
-            guard let obj = val.objectValue else { continue }
-            let id = Int(extractDouble(obj["id"]) ?? Double(idx))
-            let name = obj["name"]?.stringValue
-            let clusterId: Int? = {
-                if let c = extractDouble(obj["cluster_id"]) { return Int(c) }
-                return nil
-            }()
-            let bbox: BoundingBox? = {
-                guard let b = obj["bbox"]?.objectValue,
-                      let x = extractDouble(b["x"]),
-                      let y = extractDouble(b["y"]),
-                      let w = extractDouble(b["w"]),
-                      let h = extractDouble(b["h"]) else { return nil }
-                return BoundingBox(x: x, y: y, w: w, h: h)
-            }()
-            let center: FocusPoint? = {
-                guard let c = obj["center"]?.objectValue,
-                      let cx = extractDouble(c["x"]),
-                      let cy = extractDouble(c["y"]) else { return nil }
-                return FocusPoint(x: cx, y: cy)
-            }()
-            subjects.append(Subject(id: id, name: name, clusterId: clusterId, bbox: bbox, center: center))
-        }
-        return subjects.isEmpty ? nil : subjects
-    }
-
-    private static func subjectDict(_ s: Subject) -> [String: Any] {
-        var dict: [String: Any] = ["id": s.id]
-        if let name = s.name { dict["name"] = name }
-        if let clusterId = s.clusterId { dict["cluster_id"] = clusterId }
-        if let bbox = s.bbox {
-            dict["bbox"] = ["x": bbox.x, "y": bbox.y, "w": bbox.w, "h": bbox.h]
-        }
-        if let center = s.center {
-            dict["center"] = ["x": center.x, "y": center.y]
-        }
-        return dict
-    }
 }

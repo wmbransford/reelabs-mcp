@@ -37,7 +37,11 @@ package enum ValidateTool {
         }
 
         do {
-            let specData = try JSONSerialization.data(withJSONObject: specValue.toJSONObject())
+            let specObject = specValue.toJSONObject()
+            guard JSONSerialization.isValidJSONObject(specObject) else {
+                return .init(content: [.text(text: "Invalid 'spec': must be a JSON object (dictionary), not a string or scalar. Pass the RenderSpec as structured JSON, not a JSON-encoded string.", annotations: nil, _meta: nil)], isError: true)
+            }
+            let specData = try JSONSerialization.data(withJSONObject: specObject)
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             let spec = try decoder.decode(RenderSpec.self, from: specData)

@@ -278,6 +278,8 @@ final class ChirpClient: Sendable {
         // Fix invalid endTimes:
         // 1. endTime <= startTime (Chirp omitted endOffset, parsed as 0)
         // 2. endTime unreasonably far past the next word
+        // 3. impossibly long duration (Chirp omitted startOffset — word
+        //    gets startTime=0 while endTime sits near next word)
         for i in 0..<words.count {
             let nextStart = (i + 1 < words.count) ? words[i + 1].startTime : nil
 
@@ -294,6 +296,19 @@ final class ChirpClient: Sendable {
                     word: words[i].word,
                     startTime: words[i].startTime,
                     endTime: ns,
+                    confidence: words[i].confidence
+                )
+            }
+
+            // Clamp impossibly long durations (>2s is never a real spoken
+            // English word). Pull startTime forward past the previous word.
+            if words[i].endTime - words[i].startTime > 2.0 {
+                let prevEnd = i > 0 ? words[i - 1].endTime : 0
+                let newStart = max(words[i].endTime - 0.5, prevEnd)
+                words[i] = TranscriptWord(
+                    word: words[i].word,
+                    startTime: min(newStart, words[i].endTime - 0.01),
+                    endTime: words[i].endTime,
                     confidence: words[i].confidence
                 )
             }

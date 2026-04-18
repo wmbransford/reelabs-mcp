@@ -55,7 +55,11 @@ package enum RerenderTool {
             var baseSpec = try decoder.decode(RenderSpec.self, from: specData)
 
             if let overrides = arguments?["overrides"] {
-                let overrideData = try JSONSerialization.data(withJSONObject: overrides.toJSONObject())
+                let overrideObject = overrides.toJSONObject()
+                guard JSONSerialization.isValidJSONObject(overrideObject) else {
+                    return .init(content: [.text(text: "Invalid 'overrides': must be a JSON object (dictionary), not a string or scalar.", annotations: nil, _meta: nil)], isError: true)
+                }
+                let overrideData = try JSONSerialization.data(withJSONObject: overrideObject)
                 let overrideSpec = try decoder.decode(PartialRenderSpec.self, from: overrideData)
                 baseSpec = mergeRenderSpec(base: baseSpec, overrides: overrideSpec)
             }

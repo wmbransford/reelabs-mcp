@@ -262,33 +262,6 @@ package struct BoundingBox: Codable, Equatable, Sendable {
     }
 }
 
-package struct Subject: Codable, Sendable {
-    package let id: Int
-    package let name: String?
-    package let clusterId: Int?
-    package let bbox: BoundingBox?
-    package let center: FocusPoint?
-
-    package init(
-        id: Int,
-        name: String? = nil,
-        clusterId: Int? = nil,
-        bbox: BoundingBox? = nil,
-        center: FocusPoint? = nil
-    ) {
-        self.id = id
-        self.name = name
-        self.clusterId = clusterId
-        self.bbox = bbox
-        self.center = center
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, name, bbox, center
-        case clusterId = "cluster_id"
-    }
-}
-
 package struct SceneRecord: Codable, Sendable {
     package var sceneIndex: Int
     package var startTime: Double
@@ -297,7 +270,6 @@ package struct SceneRecord: Codable, Sendable {
     package var tags: [String]?
     package var sceneType: String?
     package var focusPoint: FocusPoint?
-    package var subjects: [Subject]?
 
     package init(
         sceneIndex: Int,
@@ -306,8 +278,7 @@ package struct SceneRecord: Codable, Sendable {
         description: String,
         tags: [String]? = nil,
         sceneType: String? = nil,
-        focusPoint: FocusPoint? = nil,
-        subjects: [Subject]? = nil
+        focusPoint: FocusPoint? = nil
     ) {
         self.sceneIndex = sceneIndex
         self.startTime = startTime
@@ -316,7 +287,6 @@ package struct SceneRecord: Codable, Sendable {
         self.tags = tags
         self.sceneType = sceneType
         self.focusPoint = focusPoint
-        self.subjects = subjects
     }
 
     enum CodingKeys: String, CodingKey {
@@ -326,7 +296,6 @@ package struct SceneRecord: Codable, Sendable {
         case description, tags
         case sceneType = "scene_type"
         case focusPoint = "focus_point"
-        case subjects
     }
 }
 
