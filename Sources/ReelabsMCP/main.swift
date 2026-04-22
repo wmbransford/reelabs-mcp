@@ -48,7 +48,7 @@ let paths = DataPaths(root: dataRoot)
 let database = try Database(root: dataRoot)
 
 let projectStore = ProjectStore(database: database)
-let assetStore = AssetStore(paths: paths)
+let assetStore = AssetStore(database: database)
 let transcriptStore = TranscriptStore(paths: paths)
 let renderStore = RenderStore(paths: paths)
 let presetStore = PresetStore(database: database)

@@ -6,9 +6,12 @@ import GRDB
 /// DB is a no-op for rows that already exist (via `INSERT OR IGNORE`).
 package enum MarkdownImporter {
     package static func runIfNeeded(database: Database) throws {
+        // Order matters: assets/transcripts/analyses/renders reference `projects(slug)`
+        // via foreign keys, so projects must land first.
         try importProjects(database: database)
         try importPresets(database: database)
-        // Later tasks will extend this with assets, transcripts, analyses, renders.
+        try importAssets(database: database)
+        // Later tasks will extend this with transcripts, analyses, renders.
     }
 
     static func importProjects(database: Database) throws {
@@ -57,6 +60,67 @@ package enum MarkdownImporter {
                         parsed.updated,
                     ]
                 )
+            }
+        }
+    }
+
+    static func importAssets(database: Database) throws {
+        let projectsDir = database.paths.projectsDir
+        guard FileManager.default.fileExists(atPath: projectsDir.path) else { return }
+
+        let projectDirs = try FileManager.default.contentsOfDirectory(
+            at: projectsDir,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        )
+
+        for projectDir in projectDirs {
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: projectDir.path, isDirectory: &isDir)
+            guard isDir.boolValue else { continue }
+
+            let projectSlug = projectDir.lastPathComponent
+
+            let entries = (try? FileManager.default.contentsOfDirectory(at: projectDir, includingPropertiesForKeys: nil)) ?? []
+            for entry in entries where entry.lastPathComponent.hasSuffix(".asset.md") {
+                guard let parsed = try? MarkdownStore.read(at: entry, as: AssetRecord.self).frontMatter else {
+                    continue
+                }
+
+                let tagsJSON: String?
+                if let tags = parsed.tags {
+                    let data = try JSONSerialization.data(withJSONObject: tags)
+                    tagsJSON = String(data: data, encoding: .utf8)
+                } else {
+                    tagsJSON = nil
+                }
+
+                try database.pool.write { conn in
+                    try conn.execute(
+                        sql: """
+                            INSERT OR IGNORE INTO assets (
+                                project_slug, slug, filename, file_path, file_size_bytes,
+                                duration_seconds, width, height, fps, codec,
+                                has_audio, tags_json, created
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        arguments: [
+                            projectSlug,
+                            parsed.slug,
+                            parsed.filename,
+                            parsed.filePath,
+                            parsed.fileSizeBytes,
+                            parsed.durationSeconds,
+                            parsed.width,
+                            parsed.height,
+                            parsed.fps,
+                            parsed.codec,
+                            parsed.hasAudio ? 1 : 0,
+                            tagsJSON,
+                            parsed.created,
+                        ]
+                    )
+                }
             }
         }
     }

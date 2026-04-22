@@ -62,27 +62,40 @@ package enum AssetTool {
                 let url = URL(fileURLWithPath: path)
                 let sourceSlug = DataPaths.deriveSourceSlug(fromSourcePath: path)
 
-                var record = AssetRecord(
-                    slug: sourceSlug,
-                    filename: url.lastPathComponent,
-                    filePath: path
-                )
-
-                // Auto-probe metadata
+                // Auto-probe metadata; fall back to bare record if probe fails.
+                var durationSeconds: Double?
+                var width: Int?
+                var height: Int?
+                var fps: Double?
+                var codec: String?
+                var hasAudio = true
+                var fileSizeBytes: Int64?
                 do {
                     let probe = try await VideoProbe.probe(path: path)
-                    record.durationSeconds = Double(probe.durationMs) / 1000.0
-                    record.width = probe.width
-                    record.height = probe.height
-                    record.fps = probe.fps
-                    record.codec = probe.codec
-                    record.hasAudio = probe.hasAudio
-                    record.fileSizeBytes = probe.fileSizeBytes
+                    durationSeconds = Double(probe.durationMs) / 1000.0
+                    width = probe.width
+                    height = probe.height
+                    fps = probe.fps
+                    codec = probe.codec
+                    hasAudio = probe.hasAudio
+                    fileSizeBytes = probe.fileSizeBytes
                 } catch {
                     // Still add the asset even if probe fails
                 }
 
-                let saved = try assetStore.upsert(project: project, source: sourceSlug, record: record)
+                let saved = try assetStore.add(
+                    project: project,
+                    slug: sourceSlug,
+                    filename: url.lastPathComponent,
+                    filePath: path,
+                    fileSizeBytes: fileSizeBytes,
+                    durationSeconds: durationSeconds,
+                    width: width,
+                    height: height,
+                    fps: fps,
+                    codec: codec,
+                    hasAudio: hasAudio
+                )
                 return .init(content: [.text(text: encode(saved), annotations: nil, _meta: nil)], isError: false)
 
             case "list":
@@ -97,7 +110,7 @@ package enum AssetTool {
                       let source = arguments?["source"]?.stringValue else {
                     return .init(content: [.text(text: "Missing required arguments: project, source", annotations: nil, _meta: nil)], isError: true)
                 }
-                if let asset = try assetStore.get(project: project, source: source) {
+                if let asset = try assetStore.get(project: project, slug: source) {
                     return .init(content: [.text(text: encode(asset), annotations: nil, _meta: nil)], isError: false)
                 }
                 return .init(content: [.text(text: "Asset not found: \(project)/\(source)", annotations: nil, _meta: nil)], isError: true)
@@ -107,13 +120,17 @@ package enum AssetTool {
                       let source = arguments?["source"]?.stringValue else {
                     return .init(content: [.text(text: "Missing required arguments: project, source", annotations: nil, _meta: nil)], isError: true)
                 }
+                guard try assetStore.get(project: project, slug: source) != nil else {
+                    return .init(content: [.text(text: "Asset not found: \(project)/\(source)", annotations: nil, _meta: nil)], isError: true)
+                }
                 let tags: [String]
                 if let tagArray = arguments?["tags"]?.arrayValue {
                     tags = tagArray.compactMap { $0.stringValue }
                 } else {
                     tags = []
                 }
-                if let asset = try assetStore.updateTags(project: project, source: source, tags: tags) {
+                try assetStore.tag(project: project, slug: source, tags: tags)
+                if let asset = try assetStore.get(project: project, slug: source) {
                     return .init(content: [.text(text: encode(asset), annotations: nil, _meta: nil)], isError: false)
                 }
                 return .init(content: [.text(text: "Asset not found: \(project)/\(source)", annotations: nil, _meta: nil)], isError: true)
@@ -123,7 +140,7 @@ package enum AssetTool {
                       let source = arguments?["source"]?.stringValue else {
                     return .init(content: [.text(text: "Missing required arguments: project, source", annotations: nil, _meta: nil)], isError: true)
                 }
-                let deleted = try assetStore.delete(project: project, source: source)
+                let deleted = try assetStore.delete(project: project, slug: source)
                 return .init(content: [.text(text: deleted ? "Asset \(project)/\(source) deleted" : "Asset not found: \(project)/\(source)", annotations: nil, _meta: nil)], isError: !deleted)
 
             default:
