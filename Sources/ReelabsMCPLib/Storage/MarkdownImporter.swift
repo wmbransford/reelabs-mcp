@@ -13,6 +13,7 @@ package enum MarkdownImporter {
         try importAssets(database: database)
         try importTranscripts(database: database)
         try importAnalyses(database: database)
+        try importRenders(database: database)
     }
 
     static func importProjects(database: Database) throws {
@@ -291,6 +292,65 @@ package enum MarkdownImporter {
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+
+    static func importRenders(database: Database) throws {
+        let projectsDir = database.paths.projectsDir
+        guard FileManager.default.fileExists(atPath: projectsDir.path) else { return }
+
+        let projectDirs = try FileManager.default.contentsOfDirectory(
+            at: projectsDir,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        )
+
+        for projectDir in projectDirs {
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: projectDir.path, isDirectory: &isDir)
+            guard isDir.boolValue else { continue }
+
+            let projectSlug = projectDir.lastPathComponent
+
+            let entries = (try? FileManager.default.contentsOfDirectory(at: projectDir, includingPropertiesForKeys: nil)) ?? []
+            for entry in entries where entry.lastPathComponent.hasSuffix(".render.md") {
+                guard let parsed = try? MarkdownStore.read(at: entry, as: RenderRecord.self) else {
+                    continue
+                }
+                let record = parsed.frontMatter
+                let (specJson, notes) = RenderStore.splitBody(parsed.body)
+
+                let sourcesJSON: String?
+                if let sources = record.sources {
+                    let data = try JSONSerialization.data(withJSONObject: sources)
+                    sourcesJSON = String(data: data, encoding: .utf8)
+                } else {
+                    sourcesJSON = nil
+                }
+
+                try database.pool.write { conn in
+                    try conn.execute(
+                        sql: """
+                            INSERT OR IGNORE INTO renders (
+                                project_slug, slug, status, duration_seconds, output_path,
+                                file_size_bytes, sources_json, spec_json, notes_md, created
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        arguments: [
+                            projectSlug,
+                            record.slug,
+                            record.status,
+                            record.durationSeconds,
+                            record.outputPath,
+                            record.fileSizeBytes,
+                            sourcesJSON,
+                            specJson ?? "",
+                            notes,
+                            record.created,
+                        ]
+                    )
                 }
             }
         }

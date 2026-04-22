@@ -50,7 +50,7 @@ let database = try Database(root: dataRoot)
 let projectStore = ProjectStore(database: database)
 let assetStore = AssetStore(database: database)
 let transcriptStore = TranscriptStore(database: database)
-let renderStore = RenderStore(paths: paths)
+let renderStore = RenderStore(database: database)
 let presetStore = PresetStore(database: database)
 let analysisStore = AnalysisStore(database: database)
 
