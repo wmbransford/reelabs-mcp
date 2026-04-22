@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# scripts/sync-migrations — copy migrations/ → Sources/ReelabsMCPLib/Resources/migrations/
+#
+# The root `migrations/` directory is the human-editable source of truth for SQL
+# migrations. SwiftPM bundles `Sources/ReelabsMCPLib/Resources/migrations/` at
+# build time (via `.copy` in Package.swift); GRDB reads the bundled copy via
+# `Bundle.module`. The two directories must stay byte-identical.
+#
+# Run this after editing any `.sql` file under `migrations/` so the bundled
+# copy picks up the change. Run before committing.
+#
+# Idempotent — safe to run any time.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$HERE/.." && pwd)"
+
+SRC="$REPO_ROOT/migrations"
+DST="$REPO_ROOT/Sources/ReelabsMCPLib/Resources/migrations"
+
+if [[ ! -d "$SRC" ]]; then
+    echo "error: $SRC does not exist" >&2
+    exit 1
+fi
+
+mkdir -p "$DST"
+
+# Only copy .sql files. Delete stale .sql in DST that no longer exists in SRC,
+# so renames/deletions propagate.
+find "$DST" -maxdepth 1 -type f -name '*.sql' -print0 | while IFS= read -r -d '' f; do
+    name="$(basename "$f")"
+    if [[ ! -f "$SRC/$name" ]]; then
+        rm -f "$f"
+    fi
+done
+
+find "$SRC" -maxdepth 1 -type f -name '*.sql' -print0 | while IFS= read -r -d '' f; do
+    name="$(basename "$f")"
+    cp "$f" "$DST/$name"
+done
+
+# Verify: diff should be silent.
+if ! diff -r "$SRC" "$DST" > /dev/null 2>&1; then
+    # Non-.sql files in DST are ignored by the diff above since we only copy .sql,
+    # but to be safe fall through to an explicit per-file comparison.
+    for f in "$SRC"/*.sql; do
+        name="$(basename "$f")"
+        if ! cmp -s "$f" "$DST/$name"; then
+            echo "error: $name drifted between migrations/ and Resources/migrations/" >&2
+            exit 1
+        fi
+    done
+fi
+
+echo "migrations synced: $SRC → $DST"
