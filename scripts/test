@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# scripts/test — wraps `swift test` with the framework search path needed
+# when only Command Line Tools (no Xcode.app) is installed. Forwards extra args.
+set -euo pipefail
+
+CLT_FW="/Library/Developer/CommandLineTools/Library/Developer/Frameworks"
+CLT_LIB="/Library/Developer/CommandLineTools/Library/Developer/usr/lib"
+
+exec swift test \
+    -Xswiftc -F -Xswiftc "$CLT_FW" \
+    -Xlinker -rpath -Xlinker "$CLT_FW" \
+    -Xlinker -rpath -Xlinker "$CLT_LIB" \
+    "$@"

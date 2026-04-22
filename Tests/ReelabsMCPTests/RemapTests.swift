@@ -327,7 +327,8 @@ struct RemapOverlaySourcesTests {
             x: 0, y: 0, width: 0.25, height: 0.25,
             opacity: 1, sourceStart: sourceStart, zIndex: 2, audio: 0,
             cornerRadius: nil, crop: nil, backgroundColor: nil,
-            text: nil, imagePath: nil, fadeIn: nil, fadeOut: nil
+            text: nil, imagePath: nil, fadeIn: nil, fadeOut: nil,
+            keyframes: nil, speed: nil
         )
     }
 
