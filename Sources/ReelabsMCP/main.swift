@@ -44,7 +44,10 @@ let dataRoot = config.resolveDataRoot()
 try FileManager.default.createDirectory(at: dataRoot, withIntermediateDirectories: true)
 let paths = DataPaths(root: dataRoot)
 
-let projectStore = ProjectStore(paths: paths)
+// Shared SQLite database (ProjectStore uses this; other stores still use paths during migration).
+let database = try Database(root: dataRoot)
+
+let projectStore = ProjectStore(database: database)
 let assetStore = AssetStore(paths: paths)
 let transcriptStore = TranscriptStore(paths: paths)
 let renderStore = RenderStore(paths: paths)

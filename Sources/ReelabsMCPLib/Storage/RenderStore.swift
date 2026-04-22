@@ -27,7 +27,7 @@ package struct RenderStore: Sendable {
             withIntermediateDirectories: true
         )
 
-        let slug = SlugGenerator.uniqueSlug(base: baseSlug) { candidate in
+        let slug = try SlugGenerator.uniqueSlug(base: baseSlug) { candidate in
             FileManager.default.fileExists(atPath: paths.renderFile(project: project, render: candidate).path)
         }
 

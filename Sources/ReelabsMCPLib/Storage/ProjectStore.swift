@@ -1,89 +1,137 @@
 import Foundation
+import GRDB
 
-/// Markdown-backed project storage. One folder per project at
-/// `{dataRoot}/projects/{slug}/` with a `project.md` at its root.
+/// SQLite-backed project storage. One row per project in the `projects` table.
 package struct ProjectStore: Sendable {
-    let paths: DataPaths
+    let database: Database
 
-    package init(paths: DataPaths) {
-        self.paths = paths
+    package init(database: Database) {
+        self.database = database
     }
 
-    /// Create a project. Slug is derived from the name.
-    /// If a project with that slug already exists, returns the existing record (idempotent).
+    /// Create a project. Slug is derived from the name and made unique against existing rows.
+    /// If the derived slug already exists with the same name, returns the existing row (idempotent by name).
     package func create(name: String, description: String? = nil, tags: [String]? = nil) throws -> ProjectRecord {
         let baseSlug = SlugGenerator.slugify(name)
-        let slug = SlugGenerator.uniqueSlug(base: baseSlug) { candidate in
-            FileManager.default.fileExists(atPath: paths.projectDir(candidate).path)
+        if let existing = try get(slug: baseSlug), existing.name == name {
+            return existing
         }
-        return try createWithSlug(slug: slug, name: name, description: description, tags: tags)
+        let uniqueSlug = try database.pool.read { conn in
+            try SlugGenerator.uniqueSlug(base: baseSlug) { candidate in
+                try Int.fetchOne(conn, sql: "SELECT 1 FROM projects WHERE slug = ?", arguments: [candidate]) != nil
+            }
+        }
+        return try createWithSlug(slug: uniqueSlug, name: name, description: description, tags: tags)
     }
 
-    /// Create a project with an explicit slug (used by auto-derivation from source paths).
-    /// Returns the existing record if the slug already exists.
+    /// Create a project with an explicit slug. Returns the existing row if the slug already exists.
     package func createWithSlug(slug: String, name: String? = nil, description: String? = nil, tags: [String]? = nil) throws -> ProjectRecord {
         if let existing = try get(slug: slug) {
             return existing
         }
+        let now = Timestamp.now()
         let record = ProjectRecord(
             slug: slug,
             name: name ?? slug,
+            status: "active",
+            created: now,
+            updated: now,
             description: description,
             tags: tags
         )
-        try FileManager.default.createDirectory(
-            at: paths.projectDir(slug),
-            withIntermediateDirectories: true
-        )
-        let file = MarkdownFile(frontMatter: record, body: description ?? "")
-        try MarkdownStore.write(file, to: paths.projectFile(slug))
+        let tagsJSON = try record.tags.map { try JSONSerialization.data(withJSONObject: $0).asUTF8String() }
+        try database.pool.write { conn in
+            try conn.execute(
+                sql: """
+                    INSERT INTO projects (slug, name, status, description, tags_json, created, updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [record.slug, record.name, record.status, record.description, tagsJSON, record.created, record.updated]
+            )
+        }
         return record
     }
 
     package func get(slug: String) throws -> ProjectRecord? {
-        let url = paths.projectFile(slug)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try MarkdownStore.read(at: url, as: ProjectRecord.self).frontMatter
+        try database.pool.read { conn in
+            try ProjectRecord.fetchOneBySlug(conn, slug: slug)
+        }
     }
 
     package func list(status: String? = nil) throws -> [ProjectRecord] {
-        guard FileManager.default.fileExists(atPath: paths.projectsDir.path) else { return [] }
-        let entries = try FileManager.default.contentsOfDirectory(
-            at: paths.projectsDir,
-            includingPropertiesForKeys: [.isDirectoryKey]
-        )
-        var out: [ProjectRecord] = []
-        for entry in entries {
-            var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: entry.path, isDirectory: &isDir)
-            guard isDir.boolValue else { continue }
-            let projectMd = entry.appendingPathComponent("project.md")
-            guard FileManager.default.fileExists(atPath: projectMd.path) else { continue }
-            if let record = try? MarkdownStore.read(at: projectMd, as: ProjectRecord.self).frontMatter {
-                if let status, record.status != status { continue }
-                out.append(record)
+        try database.pool.read { conn in
+            if let status {
+                return try ProjectRecord.fetchAll(conn, sql: """
+                    SELECT slug, name, status, description, tags_json, created, updated
+                    FROM projects WHERE status = ? ORDER BY created DESC
+                """, arguments: [status])
+            } else {
+                return try ProjectRecord.fetchAll(conn, sql: """
+                    SELECT slug, name, status, description, tags_json, created, updated
+                    FROM projects ORDER BY created DESC
+                """)
             }
         }
-        out.sort { $0.created > $1.created }
-        return out
     }
 
+    @discardableResult
     package func archive(slug: String) throws -> ProjectRecord? {
-        let url = paths.projectFile(slug)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let loaded = try MarkdownStore.read(at: url, as: ProjectRecord.self)
-        var updated = loaded.frontMatter
-        updated.status = "archived"
-        updated.updated = Timestamp.now()
-        let file = MarkdownFile(frontMatter: updated, body: loaded.body)
-        try MarkdownStore.write(file, to: url)
-        return updated
+        guard try get(slug: slug) != nil else { return nil }
+        let now = Timestamp.now()
+        try database.pool.write { conn in
+            try conn.execute(
+                sql: "UPDATE projects SET status = 'archived', updated = ? WHERE slug = ?",
+                arguments: [now, slug]
+            )
+        }
+        return try get(slug: slug)
     }
 
+    @discardableResult
     package func delete(slug: String) throws -> Bool {
-        let dir = paths.projectDir(slug)
-        guard FileManager.default.fileExists(atPath: dir.path) else { return false }
-        try FileManager.default.removeItem(at: dir)
-        return true
+        try database.pool.write { conn in
+            try conn.execute(sql: "DELETE FROM projects WHERE slug = ?", arguments: [slug])
+            return conn.changesCount > 0
+        }
+    }
+}
+
+// MARK: - GRDB row decoding
+
+extension ProjectRecord: FetchableRecord {
+    package init(row: Row) throws {
+        let tagsJSON: String? = row["tags_json"]
+        let tags: [String]?
+        if let tagsJSON, let data = tagsJSON.data(using: .utf8) {
+            tags = try? JSONSerialization.jsonObject(with: data) as? [String]
+        } else {
+            tags = nil
+        }
+        self.init(
+            slug: row["slug"],
+            name: row["name"],
+            status: row["status"],
+            created: row["created"],
+            updated: row["updated"],
+            description: row["description"],
+            tags: tags
+        )
+    }
+
+    static func fetchOneBySlug(_ conn: GRDB.Database, slug: String) throws -> ProjectRecord? {
+        try ProjectRecord.fetchOne(conn, sql: """
+            SELECT slug, name, status, description, tags_json, created, updated
+            FROM projects WHERE slug = ?
+        """, arguments: [slug])
+    }
+}
+
+// small helper
+private extension Data {
+    func asUTF8String() throws -> String {
+        guard let s = String(data: self, encoding: .utf8) else {
+            throw NSError(domain: "ProjectStore", code: 1, userInfo: [NSLocalizedDescriptionKey: "tags_json not valid UTF-8"])
+        }
+        return s
     }
 }
