@@ -6,14 +6,14 @@ import MCP
 package enum TranscriptTool {
     package static let tool = Tool(
         name: "reelabs_transcript",
-        description: "Manage existing transcripts. Actions: list (across all projects), get (rehydrate a prior transcript's compact view). IDs are compound \"project/source\" strings (e.g. \"opus-47-video/c0048\").",
+        description: "Manage existing transcripts. Actions: list (across all projects), get (rehydrate a prior transcript's compact view), search (FTS5-backed full-text search within a project — returns matching source slugs). IDs are compound \"project/source\" strings (e.g. \"opus-47-video/c0048\").",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
                 "action": .object([
                     "type": .string("string"),
-                    "description": .string("Action: list, get"),
-                    "enum": .array([.string("list"), .string("get")])
+                    "description": .string("Action: list, get, search"),
+                    "enum": .array([.string("list"), .string("get"), .string("search")])
                 ]),
                 "transcript_id": .object([
                     "type": .string("string"),
@@ -21,7 +21,11 @@ package enum TranscriptTool {
                 ]),
                 "project": .object([
                     "type": .string("string"),
-                    "description": .string("Filter list by project slug (for list)")
+                    "description": .string("Project slug (filters list; required for search)")
+                ]),
+                "query": .object([
+                    "type": .string("string"),
+                    "description": .string("FTS5 query string (for search)")
                 ])
             ]),
             "required": .array([.string("action")])
@@ -83,8 +87,24 @@ package enum TranscriptTool {
                 let data = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
                 return .init(content: [.text(text: String(data: data, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
 
+            case "search":
+                guard let project = arguments?["project"]?.stringValue else {
+                    return .init(content: [.text(text: "Missing required argument: project", annotations: nil, _meta: nil)], isError: true)
+                }
+                guard let query = arguments?["query"]?.stringValue else {
+                    return .init(content: [.text(text: "Missing required argument: query", annotations: nil, _meta: nil)], isError: true)
+                }
+                let hits = try store.fullTextSearch(project: project, query: query)
+                let response: [String: Any] = [
+                    "project": project,
+                    "query": query,
+                    "matches": hits
+                ]
+                let data = try JSONSerialization.data(withJSONObject: response, options: [.prettyPrinted, .sortedKeys])
+                return .init(content: [.text(text: String(data: data, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
+
             default:
-                return .init(content: [.text(text: "Unknown action: \(action). Use: list, get", annotations: nil, _meta: nil)], isError: true)
+                return .init(content: [.text(text: "Unknown action: \(action). Use: list, get, search", annotations: nil, _meta: nil)], isError: true)
             }
         } catch {
             return .init(content: [.text(text: "Error: \(error.localizedDescription)", annotations: nil, _meta: nil)], isError: true)
