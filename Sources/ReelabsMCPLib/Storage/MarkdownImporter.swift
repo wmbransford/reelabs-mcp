@@ -11,7 +11,8 @@ package enum MarkdownImporter {
         try importProjects(database: database)
         try importPresets(database: database)
         try importAssets(database: database)
-        // Later tasks will extend this with transcripts, analyses, renders.
+        try importTranscripts(database: database)
+        // Later tasks will extend this with analyses, renders.
     }
 
     static func importProjects(database: Database) throws {
@@ -120,6 +121,88 @@ package enum MarkdownImporter {
                             parsed.created,
                         ]
                     )
+                }
+            }
+        }
+    }
+
+    static func importTranscripts(database: Database) throws {
+        let projectsDir = database.paths.projectsDir
+        guard FileManager.default.fileExists(atPath: projectsDir.path) else { return }
+
+        let projectDirs = try FileManager.default.contentsOfDirectory(
+            at: projectsDir,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        )
+
+        for projectDir in projectDirs {
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: projectDir.path, isDirectory: &isDir)
+            guard isDir.boolValue else { continue }
+
+            let projectSlug = projectDir.lastPathComponent
+
+            let entries = (try? FileManager.default.contentsOfDirectory(at: projectDir, includingPropertiesForKeys: nil)) ?? []
+            for entry in entries where entry.lastPathComponent.hasSuffix(".transcript.md") {
+                // Skip malformed legacy data rather than crashing.
+                guard let parsed = try? MarkdownStore.read(at: entry, as: TranscriptRecord.self) else {
+                    continue
+                }
+                let sourceSlug = entry.lastPathComponent
+                    .replacingOccurrences(of: ".transcript.md", with: "")
+
+                // Words live in the sibling `{source}.words.json`.
+                let wordsURL = projectDir.appendingPathComponent("\(sourceSlug).words.json")
+                let words: [WordEntry]
+                if FileManager.default.fileExists(atPath: wordsURL.path),
+                   let data = try? Data(contentsOf: wordsURL),
+                   let decoded = try? JSONDecoder().decode([WordEntry].self, from: data) {
+                    words = decoded
+                } else {
+                    words = []
+                }
+
+                let record = parsed.frontMatter
+                let fullText = parsed.body
+
+                try database.pool.write { conn in
+                    try conn.execute(
+                        sql: """
+                            INSERT OR IGNORE INTO transcripts (
+                                project_slug, source_slug, source_path, duration_seconds,
+                                word_count, language, mode, full_text, created
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        arguments: [
+                            projectSlug,
+                            sourceSlug,
+                            record.sourcePath,
+                            record.durationSeconds,
+                            record.wordCount,
+                            record.language,
+                            record.mode,
+                            fullText,
+                            record.created,
+                        ]
+                    )
+
+                    // Only seed words when the parent transcript row was actually inserted.
+                    // If the INSERT OR IGNORE hit the conflict, we leave existing words alone.
+                    if conn.changesCount > 0 {
+                        for (i, w) in words.enumerated() {
+                            try conn.execute(
+                                sql: """
+                                    INSERT OR IGNORE INTO transcript_words (
+                                        project_slug, source_slug, word_index, word,
+                                        start_time, end_time, confidence
+                                    )
+                                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                arguments: [projectSlug, sourceSlug, i, w.word, w.start, w.end, w.confidence]
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -1,119 +1,179 @@
 import Foundation
+import GRDB
 
-/// Markdown + JSON sidecar storage for transcripts. For each transcript:
-/// - `{dataRoot}/projects/{project}/{source}.transcript.md` — agent-readable utterance view
-/// - `{dataRoot}/projects/{project}/{source}.words.json` — immutable word-level timestamps
+/// SQLite-backed transcript storage. Each transcript lives in two tables:
+///   - `transcripts`: one row per `(project_slug, source_slug)` with metadata + full_text.
+///   - `transcript_words`: one row per word, ordered by `word_index`.
+///
+/// FTS5 index `transcripts_fts` is maintained automatically by triggers declared in
+/// `001_init.sql` — touching `transcripts.full_text` keeps it in sync.
 package struct TranscriptStore: Sendable {
-    let paths: DataPaths
+    let database: Database
 
-    package init(paths: DataPaths) {
-        self.paths = paths
+    package init(database: Database) {
+        self.database = database
     }
 
-    /// Write a transcript (both markdown and words sidecar) atomically.
-    ///
-    /// `compactEntries` is the utterance-level list (same shape the agent sees in the tool response):
-    /// either `{"start": Double, "end": Double, "text": String}` or `{"gap": Double}` objects.
+    /// Insert or update a transcript plus all of its words in a single transaction.
+    /// On conflict `(project_slug, source_slug)` the row is updated and every word
+    /// is re-inserted (stale rows are deleted first to keep re-saves simple).
+    @discardableResult
     package func save(
         project: String,
         source: String,
-        record: TranscriptRecord,
-        compactEntries: [[String: Any]],
-        words: [WordEntry]
+        sourcePath: String,
+        words: [WordEntry],
+        fullText: String,
+        durationSeconds: Double,
+        language: String = "en-US",
+        mode: String = "sync"
     ) throws -> TranscriptRecord {
-        let mdURL = paths.transcriptMarkdown(project: project, source: source)
-        let wordsURL = paths.transcriptWords(project: project, source: source)
-
-        let body = Self.formatBody(record: record, entries: compactEntries)
-        let mdFile = MarkdownFile(frontMatter: record, body: body)
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let wordsData = try encoder.encode(words)
-
-        try MarkdownStore.writeAtomicPair(
-            markdown: (url: mdURL, file: mdFile),
-            sidecar: (url: wordsURL, data: wordsData)
+        let now = Timestamp.now()
+        let record = TranscriptRecord(
+            slug: "\(project)/\(source)",
+            sourcePath: sourcePath,
+            durationSeconds: durationSeconds,
+            wordCount: words.count,
+            language: language,
+            mode: mode,
+            created: now
         )
 
+        try database.pool.write { conn in
+            try conn.execute(sql: """
+                INSERT INTO transcripts (project_slug, source_slug, source_path, duration_seconds,
+                    word_count, language, mode, full_text, created)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_slug, source_slug) DO UPDATE SET
+                    source_path = excluded.source_path,
+                    duration_seconds = excluded.duration_seconds,
+                    word_count = excluded.word_count,
+                    language = excluded.language,
+                    mode = excluded.mode,
+                    full_text = excluded.full_text,
+                    created = excluded.created
+            """, arguments: [
+                project, source, sourcePath, durationSeconds,
+                words.count, language, mode, fullText, now
+            ])
+
+            try conn.execute(
+                sql: "DELETE FROM transcript_words WHERE project_slug = ? AND source_slug = ?",
+                arguments: [project, source]
+            )
+
+            for (i, w) in words.enumerated() {
+                try conn.execute(sql: """
+                    INSERT INTO transcript_words (project_slug, source_slug, word_index, word, start_time, end_time, confidence)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [project, source, i, w.word, w.start, w.end, w.confidence])
+            }
+        }
         return record
     }
 
-    /// Load just the record metadata (from the markdown front matter).
-    package func getRecord(project: String, source: String) throws -> TranscriptRecord? {
-        let url = paths.transcriptMarkdown(project: project, source: source)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try MarkdownStore.read(at: url, as: TranscriptRecord.self).frontMatter
+    package func get(project: String, source: String) throws -> TranscriptRecord? {
+        try database.pool.read { conn in
+            try TranscriptRecord.fetchOne(conn, sql: """
+                SELECT project_slug, source_slug, source_path, duration_seconds,
+                       word_count, language, mode, created
+                FROM transcripts WHERE project_slug = ? AND source_slug = ?
+            """, arguments: [project, source])
+        }
     }
 
-    /// Load the full markdown body (utterance view) — what agents read.
-    package func getMarkdown(project: String, source: String) throws -> MarkdownFile<TranscriptRecord>? {
-        let url = paths.transcriptMarkdown(project: project, source: source)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try MarkdownStore.read(at: url, as: TranscriptRecord.self)
-    }
-
-    /// Load word-level timestamps from the sidecar JSON. The renderer uses this.
     package func getWords(project: String, source: String) throws -> [WordEntry] {
-        let url = paths.transcriptWords(project: project, source: source)
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode([WordEntry].self, from: data)
+        try database.pool.read { conn in
+            try WordEntry.fetchAll(conn, sql: """
+                SELECT word, start_time AS start, end_time AS end, confidence
+                FROM transcript_words
+                WHERE project_slug = ? AND source_slug = ?
+                ORDER BY word_index
+            """, arguments: [project, source])
+        }
     }
 
-    /// Return the compact utterance list parsed out of the markdown body.
-    /// Mirrors the `transcript` array returned by `reelabs_transcribe`.
-    package func getCompactEntries(project: String, source: String) throws -> [[String: Any]] {
-        let url = paths.transcriptMarkdown(project: project, source: source)
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        let loaded = try MarkdownStore.read(at: url, as: TranscriptRecord.self)
-        return Self.parseBody(loaded.body)
+    package func list(project: String) throws -> [TranscriptRecord] {
+        try database.pool.read { conn in
+            try TranscriptRecord.fetchAll(conn, sql: """
+                SELECT project_slug, source_slug, source_path, duration_seconds,
+                       word_count, language, mode, created
+                FROM transcripts WHERE project_slug = ? ORDER BY created DESC
+            """, arguments: [project])
+        }
     }
 
-    /// List all transcripts across all projects. Returns tuples of (project, source, record).
+    /// FTS5 search — returns matching `source_slug` values within the given project,
+    /// ordered by BM25 rank (best match first).
+    package func fullTextSearch(project: String, query: String) throws -> [String] {
+        try database.pool.read { conn in
+            try String.fetchAll(conn, sql: """
+                SELECT source_slug FROM transcripts_fts
+                WHERE transcripts_fts MATCH ? AND project_slug = ?
+                ORDER BY rank
+            """, arguments: [query, project])
+        }
+    }
+
+    @discardableResult
+    package func delete(project: String, source: String) throws -> Bool {
+        try database.pool.write { conn in
+            try conn.execute(
+                sql: "DELETE FROM transcripts WHERE project_slug = ? AND source_slug = ?",
+                arguments: [project, source]
+            )
+            return conn.changesCount > 0
+        }
+    }
+
+    // MARK: - Backwards-compatible shims for pre-SQLite tool call sites
+    //
+    // These maintain the API the rest of the codebase was built against. They
+    // should be removed once Task E2 ships and callers migrate to the new API.
+
+    /// Legacy alias for `get`. Returns the metadata record only.
+    package func getRecord(project: String, source: String) throws -> TranscriptRecord? {
+        try get(project: project, source: source)
+    }
+
+    /// Legacy list across all projects. Returns `(project, source, record)` tuples,
+    /// newest first — matches the old markdown-directory-walk behavior.
     package func listAll() throws -> [(project: String, source: String, record: TranscriptRecord)] {
-        guard FileManager.default.fileExists(atPath: paths.projectsDir.path) else { return [] }
-        var out: [(String, String, TranscriptRecord)] = []
-        let projectDirs = try FileManager.default.contentsOfDirectory(
-            at: paths.projectsDir,
-            includingPropertiesForKeys: [.isDirectoryKey]
-        )
-        for pdir in projectDirs {
-            var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: pdir.path, isDirectory: &isDir)
-            guard isDir.boolValue else { continue }
-            let projectSlug = pdir.lastPathComponent
-            let entries = try FileManager.default.contentsOfDirectory(at: pdir, includingPropertiesForKeys: nil)
-            for entry in entries where entry.lastPathComponent.hasSuffix(".transcript.md") {
-                if let record = try? MarkdownStore.read(at: entry, as: TranscriptRecord.self).frontMatter {
-                    let sourceSlug = entry.lastPathComponent
-                        .replacingOccurrences(of: ".transcript.md", with: "")
-                    out.append((projectSlug, sourceSlug, record))
-                }
+        try database.pool.read { conn in
+            let rows = try Row.fetchAll(conn, sql: """
+                SELECT project_slug, source_slug, source_path, duration_seconds,
+                       word_count, language, mode, created
+                FROM transcripts ORDER BY created DESC
+            """)
+            return try rows.map { row in
+                let record = try TranscriptRecord(row: row)
+                return (row["project_slug"] as String, row["source_slug"] as String, record)
             }
         }
-        out.sort { $0.2.created > $1.2.created }
-        return out
     }
 
-    /// Delete a transcript and its words sidecar.
-    package func delete(project: String, source: String) throws -> Bool {
-        let mdURL = paths.transcriptMarkdown(project: project, source: source)
-        let wordsURL = paths.transcriptWords(project: project, source: source)
-        let fm = FileManager.default
-        var existed = false
-        if fm.fileExists(atPath: mdURL.path) {
-            try fm.removeItem(at: mdURL)
-            existed = true
+    /// Legacy "compact utterance" view — rebuilt on the fly from the word rows so
+    /// existing tools (SilenceRemoveTool, TranscriptTool) keep working without
+    /// the `.transcript.md` body on disk.
+    package func getCompactEntries(project: String, source: String) throws -> [[String: Any]] {
+        let words = try getWords(project: project, source: source)
+        let transcriptWords = words.map { w in
+            TranscriptWord(word: w.word, startTime: w.start, endTime: w.end, confidence: w.confidence)
         }
-        if fm.fileExists(atPath: wordsURL.path) {
-            try fm.removeItem(at: wordsURL)
-            existed = true
-        }
-        return existed
+        return TranscriptCompactor.compact(words: transcriptWords)
     }
 
-    // MARK: - Body format
+    /// Legacy markdown accessor — synthesizes a `MarkdownFile<TranscriptRecord>`
+    /// from DB contents (front matter from the row, body from the compact view).
+    /// Returns nil if the transcript doesn't exist.
+    package func getMarkdown(project: String, source: String) throws -> MarkdownFile<TranscriptRecord>? {
+        guard let record = try get(project: project, source: source) else { return nil }
+        let entries = try getCompactEntries(project: project, source: source)
+        let body = Self.formatBody(record: record, entries: entries)
+        return MarkdownFile(frontMatter: record, body: body)
+    }
+
+    // MARK: - Body format (pure helpers — kept as static for external callers)
 
     /// Render the utterance list as markdown:
     /// ```
@@ -137,8 +197,8 @@ package struct TranscriptStore: Sendable {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// Parse the markdown body back into compact entries.
-    /// Only parses utterance lines; gaps are reconstructed from the time deltas.
+    /// Parse a formatted markdown body back into compact entries.
+    /// Left public for legacy callers that still parse `.transcript.md` files on disk.
     static func parseBody(_ body: String) -> [[String: Any]] {
         var out: [[String: Any]] = []
         var lastEnd: Double? = nil
@@ -176,5 +236,36 @@ package struct TranscriptStore: Sendable {
         let mins = Int(seconds) / 60
         let secs = seconds - Double(mins * 60)
         return String(format: "%d:%05.2f", mins, secs)
+    }
+}
+
+// MARK: - GRDB row decoding
+
+extension TranscriptRecord: FetchableRecord {
+    package init(row: Row) throws {
+        // Rows come from queries that SELECT project_slug + source_slug explicitly;
+        // combine them into the compound slug the rest of the codebase expects.
+        let project: String = row["project_slug"]
+        let source: String = row["source_slug"]
+        self.init(
+            slug: "\(project)/\(source)",
+            sourcePath: row["source_path"],
+            durationSeconds: row["duration_seconds"],
+            wordCount: row["word_count"],
+            language: row["language"],
+            mode: row["mode"],
+            created: row["created"]
+        )
+    }
+}
+
+extension WordEntry: FetchableRecord {
+    package init(row: Row) throws {
+        self.init(
+            word: row["word"],
+            start: row["start"],
+            end: row["end"],
+            confidence: row["confidence"]
+        )
     }
 }

@@ -107,21 +107,16 @@ package enum TranscribeTool {
             }
 
             let mode = durationSeconds <= 55 ? "sync" : "chunked-sync (\(Int(ceil(durationSeconds / 50))) chunks)"
-            let record = TranscriptRecord(
-                slug: sourceSlug,
-                sourcePath: path,
-                durationSeconds: transcriptData.durationSeconds,
-                wordCount: transcriptData.words.count,
-                language: language,
-                mode: mode
-            )
 
-            _ = try transcriptStore.save(
+            let record = try transcriptStore.save(
                 project: projectSlug,
                 source: sourceSlug,
-                record: record,
-                compactEntries: compactArray,
-                words: wordEntries
+                sourcePath: path,
+                words: wordEntries,
+                fullText: transcriptData.fullText,
+                durationSeconds: transcriptData.durationSeconds,
+                language: language,
+                mode: mode
             )
 
             // Run the verification flagger over word-level timestamps so the agent can

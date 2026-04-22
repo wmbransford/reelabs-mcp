@@ -69,17 +69,20 @@ CREATE VIRTUAL TABLE transcripts_fts USING fts5(
     tokenize = 'porter unicode61'
 );
 
+-- transcripts_fts is a standalone FTS5 table (no content=''), so rows are
+-- deleted with a plain DELETE statement. The contentless-table "delete" magic
+-- command (INSERT INTO fts(fts, rowid, ...) VALUES ('delete', ...)) only works
+-- when the table is declared with content='' and fails with SQL logic error
+-- on standalone tables — hence the plain-DELETE form below.
 CREATE TRIGGER transcripts_fts_ai AFTER INSERT ON transcripts BEGIN
     INSERT INTO transcripts_fts(rowid, full_text, project_slug, source_slug)
     VALUES (new.rowid, new.full_text, new.project_slug, new.source_slug);
 END;
 CREATE TRIGGER transcripts_fts_ad AFTER DELETE ON transcripts BEGIN
-    INSERT INTO transcripts_fts(transcripts_fts, rowid, full_text, project_slug, source_slug)
-    VALUES ('delete', old.rowid, old.full_text, old.project_slug, old.source_slug);
+    DELETE FROM transcripts_fts WHERE rowid = old.rowid;
 END;
 CREATE TRIGGER transcripts_fts_au AFTER UPDATE ON transcripts BEGIN
-    INSERT INTO transcripts_fts(transcripts_fts, rowid, full_text, project_slug, source_slug)
-    VALUES ('delete', old.rowid, old.full_text, old.project_slug, old.source_slug);
+    DELETE FROM transcripts_fts WHERE rowid = old.rowid;
     INSERT INTO transcripts_fts(rowid, full_text, project_slug, source_slug)
     VALUES (new.rowid, new.full_text, new.project_slug, new.source_slug);
 END;
