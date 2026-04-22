@@ -14,12 +14,15 @@ Then tell the user to run `/mcp` to reconnect the client.
 
 **Why not `swift build` or `pkill`?** The server runs from `.build/release/ReelabsMCP`, managed by a launchd agent (`com.reelabs.mcp`) with `KeepAlive`. `swift build` (debug mode) doesn't update the release binary. `pkill` just makes launchd respawn the old binary. `./dev.sh` handles both correctly.
 
-**Run tests:** `swift test` (28 tests across 4 suites)
+**Run tests:** `./scripts/test` (swift-testing wrapper; sets framework search paths for CommandLineTools-only macOS).
 
 Other commands:
 ```bash
 swift build -c release            # compile only (no restart)
 swift package resolve              # after Package.swift changes
+./scripts/db tables                # sqlite wrapper — see "Data Store" below
+./scripts/db verify-parity         # compare DB rows vs. legacy on-disk markdown
+./scripts/sync-migrations          # copy migrations/*.sql → Resources/ after edits
 ```
 
 - **Swift 6.2**, strict concurrency mode, **macOS 26+** minimum
@@ -59,16 +62,19 @@ Sources/
     ├── ValueConversion.swift       ← MCP Value → Foundation JSON bridge
     ├── HTTPServer.swift            ← HTTP transport layer (NIO-based, serves /mcp endpoint)
     ├── Storage/
-    │   ├── Paths.swift             ← DataPaths: resolves projects/, presets/, kits/, Media/ subpaths from the root URL
+    │   ├── Paths.swift             ← DataPaths: resolves projects/, presets/, kits/, Media/, reelabs.db paths from the root URL
     │   ├── Models.swift            ← Codable record types (ProjectRecord, AssetRecord, TranscriptRecord, etc.)
-    │   ├── MarkdownStore.swift     ← Atomic read/write of markdown + YAML front matter, writeAtomicPair
+    │   ├── Database.swift          ← Owns the GRDB DatabasePool; applies migrations and one-shot importer on init
     │   ├── SlugGenerator.swift     ← slugify() + uniqueSlug()
-    │   ├── ProjectStore.swift      ← CRUD on {dataRoot}/projects/{slug}/project.md
-    │   ├── AssetStore.swift        ← CRUD on {project}/{source}.asset.md
-    │   ├── TranscriptStore.swift   ← CRUD on {project}/{source}.transcript.md + .words.json
-    │   ├── RenderStore.swift       ← CRUD on {project}/{render}.render.md (spec embedded as fenced json)
-    │   ├── PresetStore.swift       ← CRUD on {dataRoot}/presets/{name}.md
-    │   └── AnalysisStore.swift     ← CRUD on {project}/{source}.analysis.md + .scenes.json
+    │   ├── ProjectStore.swift      ← CRUD on projects table
+    │   ├── AssetStore.swift        ← CRUD on assets table
+    │   ├── TranscriptStore.swift   ← CRUD on transcripts + transcript_words; fullTextSearch via transcripts_fts
+    │   ├── RenderStore.swift       ← CRUD on renders table (spec_json + notes_md split)
+    │   ├── PresetStore.swift       ← CRUD on presets table
+    │   ├── AnalysisStore.swift     ← CRUD on analyses + scenes
+    │   └── Importer/               ← Legacy read path — one-shot on first DB open
+    │       ├── MarkdownStore.swift ← YAML front matter parser (Yams)
+    │       └── MarkdownImporter.swift ← Walks on-disk .md/.json, INSERT OR IGNOREs into the DB
     ├── Models/
     │   └── RenderSpec.swift        ← All render types: RenderSpec, SegmentSpec, CaptionConfig, Overlay, etc.
     ├── Tools/
@@ -176,34 +182,50 @@ AnalyzeTool.handle(action: "store")
 
 ## Data Store
 
-All persistent state lives on disk as markdown files + JSON sidecars under the `data/` root (configurable via `data_path` in config.json; defaults to `~/Library/Application Support/ReelabsMCP/data`).
+All persistent runtime state lives in **`{dataRoot}/reelabs.db`** — a single SQLite database managed by GRDB in WAL mode with `PRAGMA foreign_keys = ON`. Legacy on-disk markdown and JSON files are still present but are now just dormant — the markdown importer reads them once at first DB open (idempotent) and SQLite is the source of truth from then on.
 
 ### Layout
 
-```
-data/
-├── projects/
-│   └── {project-slug}/
-│       ├── project.md                  ← project metadata (YAML front matter)
-│       ├── {source}.asset.md           ← per-source-video metadata
-│       ├── {source}.transcript.md      ← agent-readable utterance view
-│       ├── {source}.words.json         ← immutable word-level timestamps (for renderer)
-│       ├── {source}.analysis.md        ← visual analysis metadata
-│       ├── {source}.scenes.json        ← scene descriptions
-│       └── {render}.render.md          ← render metadata + full RenderSpec as fenced ```json block
-└── presets/
-    └── {name}.md                       ← type: caption | render | audio in front matter
-```
+- **`{dataRoot}/reelabs.db`** (SQLite, WAL, GRDB) — projects, assets, transcripts, transcript_words, analyses, scenes, renders, presets. FTS5 virtual table `transcripts_fts` indexes `transcripts.full_text`, kept in sync by triggers.
+- **`{dataRoot}/kits/*.md`** — hand-authored editorial recipes. Intentionally NOT in the DB; read directly by `DefaultKits.seed` + the agents that consume them.
+- **`{dataRoot}/Media/Frames/`**, rendered `.mp4`s, generated PNGs, extracted `.m4a` — binary outputs on disk, tracked by DB rows (the paths are stored as columns, the bytes stay on disk).
+- **`{dataRoot}/projects/**/*.md`**, **`*.words.json`**, **`*.scenes.json`** — legacy write-once copies kept until the SQLite migration has baked in. Safe to delete once `scripts/db verify-parity` is clean (see below).
+- **`migrations/*.sql`** — schema evolution, applied in lexical order by `Database.swift`, recorded in `schema_migrations`. The bundled copy lives at `Sources/ReelabsMCPLib/Resources/migrations/` and must stay byte-identical to the root copy — run `./scripts/sync-migrations` after editing a migration.
 
 ### Store Conventions
 
-- Every markdown file has YAML front matter parsed as a `Codable` record type (see `Storage/Models.swift`)
-- Every front matter includes `schema_version: 1` for future-proofing
-- All writes go through `MarkdownStore.write` (single file, atomic) or `writeAtomicPair` (md + json sidecar)
-- Identifiers are human-readable slugs (kebab-case) — collisions handled by `SlugGenerator.uniqueSlug`
-- Stores are plain structs holding a `DataPaths` value; passed explicitly to tools (no globals)
-- `reelabs_render` stores the full spec as a fenced ```json block inside the body of `{render}.render.md` — `reelabs_rerender` parses it back
-- Full-text search is provided by ripgrep on `data/**/*.md` — no bespoke search tool needed
+- Stores hold a `Database` value (not a `DataPaths`) and expose GRDB-backed CRUD. All writes use `database.pool.write`; multi-row writes (e.g. transcripts + their words, analyses + their scenes) go inside a single transaction.
+- Primary keys are slugs. Projects are keyed by `slug`. Assets, transcripts, analyses, renders are keyed by `(project_slug, slug)` (or `(project_slug, source_slug)` for analyses/transcripts). Presets are keyed by `name`.
+- On conflict, live `save(...)` calls do `ON CONFLICT DO UPDATE` — these are real upserts. The one-shot `MarkdownImporter.runIfNeeded` uses `INSERT OR IGNORE` so re-running against a populated DB is a no-op.
+- Foreign keys cascade from `projects(slug)` into every child table — deleting a project removes its assets, transcripts, words, analyses, scenes, and renders.
+- RenderSpecs live in `renders.spec_json` (full spec as JSON) separate from `renders.notes_md` (prose half of the old `.render.md` body). `reelabs_rerender` pulls `spec_json` directly; markdown parsing is gone from the live path.
+- Legacy markdown reading still exists in `Sources/ReelabsMCPLib/Storage/Importer/`. It's the only caller of `Yams` and runs exactly once — it can be deleted entirely once the on-disk markdown is gone.
+
+### Ad-hoc SQL and Verification
+
+Use the `scripts/db` wrapper instead of invoking `sqlite3` by hand:
+
+```bash
+./scripts/db tables                        # list tables
+./scripts/db query "SELECT slug, name FROM projects WHERE status='active'"
+./scripts/db query-json "SELECT * FROM renders LIMIT 5"
+./scripts/db exec  "UPDATE presets SET description='...' WHERE name='william'"
+./scripts/db path                          # resolved DB path
+```
+
+The wrapper sets `foreign_keys=ON`, `synchronous=NORMAL`, and a 5 s busy timeout. It resolves the DB from `REELABS_DATA_DIR` (dev) or `~/Library/Application Support/ReelabsMCP/` (prod).
+
+### Verifying the SQLite migration
+
+After upgrading — or before deleting any legacy on-disk state — run:
+
+```bash
+./scripts/db verify-parity
+```
+
+It walks `{dataRoot}/projects` and `{dataRoot}/presets` and compares each markdown/JSON file against the matching SQLite row. Output is one line per row reporting `OK`, `MISSING_IN_DB`, `MISSING_ON_DISK`, or `DIFFER` (with a field-level diff). Exit 0 on all-OK, 1 on any mismatch — usable from scripts.
+
+If the report is all OK, the on-disk `.md`/`.json` files are redundant and can be deleted manually. The legacy importer + Yams stay until that manual cleanup lands.
 
 ## Adding a New Tool
 

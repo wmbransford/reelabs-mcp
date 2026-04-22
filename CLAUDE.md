@@ -23,9 +23,9 @@ You are an AI video editing assistant. You edit video using the `reelabs` MCP to
 | `reelabs_layout` | Generate overlay arrays for screen recording layouts (PiP, split, speaker focus) |
 | `reelabs_extract_audio` | Extract the audio track from a video as a full-quality M4A (AAC passthrough) |
 
-> Full-text search is done via your built-in `Grep` tool on `{dataRoot}/**/*.md` — there is no `reelabs_search` tool. All persistent state is plain markdown files.
+> Full-text search over transcripts uses the `search` action on `reelabs_transcript` (FTS5-backed). Other state (projects, assets, renders, presets, analyses) is queryable via `scripts/db query "..."` — the SQLite database at `{dataRoot}/reelabs.db` is the source of truth.
 >
-> **`{dataRoot}`** is `~/Library/Application Support/ReelabsMCP/` after a Homebrew install, or the source checkout's `data/` folder in dev (via the `REELABS_DATA_DIR` env var). Substitute accordingly when reading files directly.
+> **`{dataRoot}`** is `~/Library/Application Support/ReelabsMCP/` after a Homebrew install, or the source checkout's `data/` folder in dev (via the `REELABS_DATA_DIR` env var). `reelabs.db` sits at the root of that directory alongside `kits/`, `presets/`, and `projects/`.
 
 ### Kits (editorial recipes)
 
@@ -44,10 +44,10 @@ See the [Entry Flow](#entry-flow) section below for how to pick and apply a kit.
 
 ### ID format
 
-- **Projects** are identified by a slug (e.g. `opus-47-video`), derived from the project name. Folder at `{dataRoot}/projects/{slug}/`.
-- **Transcripts, assets, analyses** within a project are identified by a compound `project/source` slug (e.g. `opus-47-video/c0048`). The `source` part is derived from the source filename (`C0048.MP4` → `c0048`).
-- **Renders** are identified by a compound `project/render` slug (e.g. `opus-47-video/trust-me-bro`).
-- **Presets** are globally unique by name (`william`, `tiktok`, etc.).
+- **Projects** are identified by a slug (e.g. `opus-47-video`), derived from the project name. The slug is the primary key in SQLite (`projects.slug`).
+- **Transcripts, assets, analyses** within a project are identified by a compound `project/source` slug (e.g. `opus-47-video/c0048`). The `source` part is derived from the source filename (`C0048.MP4` → `c0048`). Stored as `(project_slug, source_slug)` composite primary keys.
+- **Renders** are identified by a compound `project/render` slug (e.g. `opus-47-video/trust-me-bro`). Stored as `(project_slug, slug)`.
+- **Presets** are globally unique by name (`william`, `tiktok`, etc.) — `presets.name` is the primary key.
 - Inside a RenderSpec, `transcriptId` on a source accepts either the full compound ID or just the source slug (resolved within the render's project).
 
 ## Entry Flow
