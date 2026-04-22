@@ -363,6 +363,7 @@ Retrieves a stored analysis with all scenes.
 | `transform` | object | — | `scale`, `panX` (-1 to 1), `panY` (-1 to 1) — static for whole segment |
 | `keyframes` | array | — | animated transform — array of `{time, scale, panX, panY}`. Overrides `transform` |
 | `transition` | object | — | `type` ("crossfade"), `duration` (seconds) |
+| `audioFromPrev` | bool | — | Marks this segment as a cross-cut: a b-roll VISUAL overlay, not a timeline-advancing segment. Auto-inferred as `true` when `volume == 0` AND this segment's `sourceId` differs from the previous. **Semantics:** the segment contributes ZERO to the audio timeline and does NOT advance composition time. Its video becomes a full-frame overlay layered above the continuous speaker track. Adjacent speaker segments butt directly together on the A/B tracks — speaker audio plays continuously end-to-end with no gaps and no content splices. `transition` on the cross-cut segment becomes the overlay's fade-IN; the NEXT non-cross-cut segment's `transition` becomes its fade-OUT. `segment.start` / `end` define the broll's own source window (how long it's visible). Captions are drawn only from speaker segments — no "bridge words" from skipped source content. Use a true `overlays` entry instead if you want picture-in-picture or custom positioning. |
 
 **captions** (optional):
 
@@ -428,6 +429,14 @@ Example:
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `codec` | string | "h264" | "h264" or "hevc" (HEVC = smaller files at same quality) |
+| `bitrate` | int | see table | Override the default bitrate in bits/sec. Only honored by the reader/writer export path (used when captions or LUT are present). |
+
+**Default bitrate table** (when `bitrate` is not specified):
+
+| Codec | 4K (≥3840 long or ≥2160 short) | 1080p | 720p |
+|-------|-------|-------|------|
+| HEVC  | 50 Mbps | 18 Mbps | 6 Mbps |
+| H.264 | 45 Mbps | 10 Mbps | 4 Mbps |
 
 Example:
 ```json
@@ -467,6 +476,8 @@ Type is inferred from field presence (priority: `sourceId` > `imagePath` > `text
 | `imagePath` | string | — | absolute path to image file (PNG, JPEG). Makes this an image overlay |
 | `fadeIn` | double | 0 | seconds for opacity fade-in at overlay start |
 | `fadeOut` | double | 0 | seconds for opacity fade-out at overlay end |
+| `keyframes` | array | — | animated scale/opacity/x/y/rotation curve — see **Overlay Keyframes** below |
+| `speed` | double | 1.0 | playback-rate multiplier, 0.25-4.0 (video overlays only) — see **Overlay Speed** below |
 
 **text** object (TextOverlayConfig):
 
@@ -592,9 +603,25 @@ Example — Image overlay from `reelabs_graphic` (lower third PNG):
 - Preset string: `"720p"`, `"1080p"`, `"4k"`
 - Custom object: `{"width": 1920, "height": 1080}`
 
-**fps** (optional) — defaults to source. Set explicitly to override (e.g. `30.0`, `60.0`).
+**fps** (optional) — defaults to **30** for social/recruiting delivery. Set explicitly to override (e.g. `60.0` for motion-heavy content). Source frame rate is still reported by `reelabs_probe` and preserved on the source side; only the export target falls to 30.
 
 **aspectRatio** (optional) — `"16:9"`, `"9:16"`, `"1:1"`, `"4:5"`. Omit to match source.
+
+**lut** (optional) — apply a 3D `.cube` LUT to every video frame (main segments + video overlays). Generated overlays (captions, text cards, color cards, image PNGs) are NOT graded. When a LUT is specified the compositor switches its working color space to linear sRGB so the cube interpolates in scene-linear light, matching Resolve's default behavior.
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `path` | string | — | absolute path to a `.cube` 3D LUT file (LUT_3D_SIZE required; 1D LUTs are rejected) |
+| `strength` | double | 1.0 | 0.0 (no LUT) – 1.0 (fully graded). Blends ungraded source with graded output linearly. |
+
+Example — Sony FX6 S-Log3 → Rec.709:
+```json
+{
+  "lut": {
+    "path": "/Users/william/Desktop/Williams Hub/Tungsten Fx6-Legacy.cube"
+  }
+}
+```
 
 **outputPath** (required) — absolute path for output file.
 
@@ -723,6 +750,77 @@ Example — slow zoom in over 10 seconds:
 ```
 
 To simulate ease-in-out, add intermediate keyframes with closer spacing near the start and end. No code changes needed — just more keyframes in the spec.
+
+### Overlay Speed (Slow-Mo / Fast-Forward)
+
+`speed` on a video overlay controls the playback rate of the overlay's source content, mirroring segment-level `speed`. Only meaningful when `sourceId` is set; ignored for image/text/color overlays (a validation warning is emitted).
+
+- `speed: 1.0` — realtime (default)
+- `speed: 0.5` — 2x slow-mo (source plays half-speed in the composition window)
+- `speed: 0.25` — 4x slow-mo (cinematic; pairs with 119.88fps high-speed b-roll rendered out at 30fps)
+- `speed: 2.0` — 2x fast-forward
+- Range clamped to **0.25 – 4.0**. Out-of-range values emit a `[Builder] WARNING` and clamp; `reelabs_validate` flags them pre-flight.
+
+Behavior:
+- The overlay's **composition window `[start, end]` is unchanged.** Only how much source content is consumed changes: `sourceConsumed = (end - start) * speed`.
+- Example: `start: 8.0, end: 12.0, sourceStart: 2.0, speed: 0.25` → composition window is 4s; consumes 1s of source (from `src 2.0s` to `src 3.0s`) and stretches it to fill the 4s window at quarter-speed.
+- Auto-clamp: if `sourceConsumed` exceeds available source (from `sourceStart` to end of file), the composition window is shortened proportionally and a `[Builder]` log line reports the adjustment.
+
+Audio:
+- Overlay audio (when `audio > 0`) is scaled alongside video. **No pitch correction** is applied — slowed audio drops pitch, sped-up audio rises. For b-roll with `audio: 0` (the default), pitch is moot.
+
+Keyframes with speed:
+- Keyframe `time` is **composition-relative**, not source-relative. With `speed: 0.25` over a 4s window, a keyframe at `time: 2.0` fires at the halfway point of the displayed b-roll (at composition time `start + 2.0`), regardless of how much underlying source has advanced.
+
+Pairs naturally with:
+- High-framerate source material (119.88fps Sony FX6, 240fps iPhone slo-mo) → render target fps of 30 means effective 4x temporal density at `speed: 0.25`, preserving motion smoothness.
+- `audio: 0` — b-roll visuals over continuous speaker voice, no pitch drift.
+
+### Overlay Keyframes (Kinetic Text / Motion)
+
+Use `keyframes` on an `Overlay` to animate a kinetic text slam, pop, whip, settle, or slide. Works for every overlay kind (video, image, text, color). Requires 2+ keyframes. Interpolation is linear between consecutive keyframes; before the first / after the last keyframe the endpoint value holds (clamp).
+
+Time is relative to the overlay's `start`. Keyframe transforms are applied **on top** of the overlay's static target rect, in this order per frame:
+
+1. LUT (if configured) on the source pixel buffer
+2. preferredTransform (y-flip conjugated) — video overlays only
+3. source crop → cover-fill → targetRect clip → cornerRadius mask (static)
+4. **keyframe scale + rotation about overlay center**
+5. opacity = fade-ramp × keyframe opacity
+6. translate to targetRect origin + keyframe (x, y) offset
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `time` | double | — | seconds relative to overlay `start` |
+| `scale` | double | 1.0 | multiplicative scale about the overlay's center — >1 punches through the target rect bounds, which is what you want for a slam overshoot |
+| `opacity` | double | 1.0 | multiplicative opacity — combines with the overlay's `opacity`, `fadeIn`, and `fadeOut` |
+| `x` | double | 0.0 | horizontal offset in render-width fractions (added to base `x`) |
+| `y` | double | 0.0 | vertical offset in render-height fractions (added to base `y`) — positive is down (top-left origin, same as overlay position fields) |
+| `rotation` | double | 0.0 | rotation in **degrees** about the overlay's center (positive = counter-clockwise in CIImage space) |
+
+Missing channels on a keyframe forward-fill from the previous keyframe — set `scale` once on the first keyframe and omit it on later opacity-only keyframes if you like.
+
+Example — a kinetic "50/50" slam with overshoot + settle (the Flex Power pattern from run-11):
+```json
+{
+  "imagePath": "/path/to/5050-kinetic.png",
+  "start": 33.20, "end": 34.60,
+  "x": 0.09, "y": 0.36, "width": 0.82, "height": 0.29,
+  "zIndex": 6,
+  "keyframes": [
+    {"time": 0.00, "scale": 0.60, "opacity": 0.0, "rotation": -6.0},
+    {"time": 0.08, "scale": 1.18, "opacity": 1.0, "rotation": -3.0},
+    {"time": 0.20, "scale": 1.00, "opacity": 1.0, "rotation": -4.0},
+    {"time": 1.40, "scale": 1.00, "opacity": 1.0, "rotation": -4.0}
+  ]
+}
+```
+
+Tuning notes:
+- **Slam / pop:** scale 0.6 → overshoot 1.15-1.2 over 60-90ms → settle to 1.0 over 100-150ms. Starting rotation -6° rocks into -4° for a visual punch.
+- **Whip / slide-in:** animate `x` or `y` from an off-screen value (e.g. `y: -0.1`) to 0 while ramping opacity 0 → 1 over 150-250ms.
+- **Ease:** linear between keyframes is fine for v1. To simulate ease-in-out, add intermediate keyframes with closer time spacing near the start/end.
+- **Keyframe opacity vs `fadeIn`:** they multiply. Use `keyframes[0].opacity = 0` for a per-keyframe ramp OR set `fadeIn`/`fadeOut` for a simple ramp — don't double-count.
 
 ### Re-render
 

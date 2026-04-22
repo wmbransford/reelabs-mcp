@@ -1,6 +1,19 @@
 import AVFoundation
 import CoreImage
 
+/// Resolved overlay keyframe for compositor-side evaluation. All channels
+/// are fully filled (forward-fill from prior keyframes, or overlay defaults
+/// scale=1, opacity=1, x/y/rotation=0).
+struct ResolvedOverlayKeyframe: Sendable {
+    /// Seconds from overlay start.
+    let time: Double
+    let scale: Double
+    let opacity: Double
+    let x: Double          // render-width fraction
+    let y: Double          // render-height fraction
+    let rotationRadians: Double
+}
+
 /// Per-layer compositing info for the custom VideoCompositor.
 struct LayerInfo: @unchecked Sendable {
     let trackID: CMPersistentTrackID
@@ -22,6 +35,14 @@ struct LayerInfo: @unchecked Sendable {
 
     // Generated overlay (color/text) — pre-rendered CIImage, skip sourceFrame lookup
     let generatedImage: CIImage?
+
+    /// Overlay animated keyframes, resolved into fully-filled channels.
+    /// Times are measured from `overlayStartSeconds`. nil = no animation.
+    let overlayKeyframes: [ResolvedOverlayKeyframe]?
+    /// Composition time (seconds) where the parent overlay begins. Used to
+    /// convert the compositor's `currentTime` into an elapsed-from-overlay
+    /// value for keyframe interpolation.
+    let overlayStartSeconds: Double?
 }
 
 /// Custom instruction that carries an ordered list of layers for the compositor.

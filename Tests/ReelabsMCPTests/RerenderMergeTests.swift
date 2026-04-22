@@ -16,7 +16,7 @@ struct RerenderMergeTests {
     func explicitInit() {
         let spec = RenderSpec(
             sources: [.init(id: "a", path: "/tmp/a.mp4", transcriptId: nil)],
-            segments: [SegmentSpec(sourceId: "a", start: 0, end: 5, speed: nil, transform: nil, keyframes: nil, transition: nil, volume: nil)],
+            segments: [SegmentSpec(sourceId: "a", start: 0, end: 5, speed: nil, transform: nil, keyframes: nil, transition: nil, volume: nil, audioFromPrev: nil)],
             captions: CaptionConfig(preset: "tiktok", transcriptId: nil, fontFamily: nil, fontSize: nil, fontWeight: nil, color: nil, highlightColor: nil, position: nil, allCaps: nil, shadow: nil, wordsPerGroup: nil, punctuation: nil),
             audio: nil,
             quality: QualityConfig(codec: .hevc, bitrate: nil, quality: nil),
@@ -96,7 +96,7 @@ struct RerenderMergeTests {
 
     @Test("SegmentSpec memberwise init")
     func segmentSpecInit() {
-        let seg = SegmentSpec(sourceId: "a", start: 1.0, end: 5.0, speed: 2.0, transform: nil, keyframes: nil, transition: nil, volume: 0.8)
+        let seg = SegmentSpec(sourceId: "a", start: 1.0, end: 5.0, speed: 2.0, transform: nil, keyframes: nil, transition: nil, volume: 0.8, audioFromPrev: nil)
         #expect(seg.sourceId == "a")
         #expect(seg.speed == 2.0)
         #expect(seg.volume == 0.8)

@@ -30,7 +30,8 @@ package enum TranscribeTool {
         arguments: [String: Value]?,
         transcriptStore: TranscriptStore,
         projectStore: ProjectStore,
-        config: ServerConfig
+        config: ServerConfig,
+        authenticator: GoogleAuthenticator?
     ) async -> CallTool.Result {
         guard let path = arguments?["path"]?.stringValue else {
             return .init(content: [.text(text: "Missing required argument: path", annotations: nil, _meta: nil)], isError: true)
@@ -38,6 +39,13 @@ package enum TranscribeTool {
 
         guard FileManager.default.fileExists(atPath: path) else {
             return .init(content: [.text(text: "File not found: \(path)", annotations: nil, _meta: nil)], isError: true)
+        }
+
+        guard let authenticator else {
+            return .init(content: [.text(
+                text: "Transcription is not configured. Set GOOGLE_APPLICATION_CREDENTIALS to a GCP service-account key with Speech-to-Text access, or add `gcp_credentials_path` to config.json.",
+                annotations: nil, _meta: nil
+            )], isError: true)
         }
 
         let language = arguments?["language"]?.stringValue ?? "en-US"
@@ -64,15 +72,8 @@ package enum TranscribeTool {
             let flacURL = try await AudioExtractor.extractAudio(from: videoURL)
             defer { try? FileManager.default.removeItem(at: flacURL) }
 
-            // Transcribe via the ReeLabs proxy (Cloud Functions → Chirp).
-            let storedToken = try? TokenKeychain.read()
-            guard let apiToken = storedToken ?? nil, !apiToken.isEmpty else {
-                return .init(content: [.text(
-                    text: "Not signed in. Tell the user to run `reelabs-mcp sign-in` in their terminal, then retry.",
-                    annotations: nil, _meta: nil
-                )], isError: true)
-            }
-            let client = ChirpClient(proxyURL: ProxyEndpoints.transcribe, apiToken: apiToken)
+            // Transcribe directly via Chirp v2 (no proxy).
+            let client = ChirpClient(authenticator: authenticator)
             let transcriptData: TranscriptData
             do {
                 transcriptData = try await client.transcribe(
@@ -80,14 +81,14 @@ package enum TranscribeTool {
                     durationSeconds: durationSeconds,
                     language: language
                 )
-            } catch ChirpError.unauthenticated {
+            } catch let err as ChirpError {
                 return .init(content: [.text(
-                    text: "Sign-in has expired. Tell the user to run `reelabs-mcp sign-in` again.",
+                    text: "Transcription failed: \(err.errorDescription ?? "\(err)")",
                     annotations: nil, _meta: nil
                 )], isError: true)
-            } catch ChirpError.quotaExceeded(let body) {
+            } catch let err as GoogleAuthenticator.AuthError {
                 return .init(content: [.text(
-                    text: "Free-tier quota reached. Upgrade at https://reelabs.ai to continue. (\(body))",
+                    text: "Auth error: \(err.errorDescription ?? "\(err)")",
                     annotations: nil, _meta: nil
                 )], isError: true)
             }

@@ -122,6 +122,7 @@ private struct PartialRenderSpec: Codable {
     let aspectRatio: AspectRatio?
     let resolution: Resolution?
     let fps: Double?
+    let lut: LUTSpec?
     let outputPath: String?
 }
 
@@ -136,6 +137,7 @@ private func mergeRenderSpec(base: RenderSpec, overrides: PartialRenderSpec) -> 
         aspectRatio: overrides.aspectRatio ?? base.aspectRatio,
         resolution: overrides.resolution ?? base.resolution,
         fps: overrides.fps ?? base.fps,
+        lut: overrides.lut ?? base.lut,
         outputPath: overrides.outputPath ?? base.outputPath
     )
 }

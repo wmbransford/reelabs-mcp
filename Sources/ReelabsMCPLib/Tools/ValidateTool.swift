@@ -150,6 +150,14 @@ package enum ValidateTool {
                     if overlay.width <= 0 || overlay.width > 1.0 || overlay.height <= 0 || overlay.height > 1.0 {
                         issues.append("Overlay \(i): width/height out of range (0, 1]")
                     }
+                    if let speed = overlay.speed {
+                        if overlay.kind != .video {
+                            issues.append("Warning: overlay \(i) has speed=\(speed) but is not a video overlay — speed only applies to video overlays")
+                        }
+                        if speed < 0.25 || speed > 4.0 {
+                            issues.append("Overlay \(i): speed \(speed)x out of range (0.25-4.0)")
+                        }
+                    }
                 }
             }
 

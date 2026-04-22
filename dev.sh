@@ -12,6 +12,20 @@ swift build -c release 2>&1 | tail -1
 echo "Pointing server at dev data root via REELABS_DATA_DIR..."
 launchctl setenv REELABS_DATA_DIR "$SCRIPT_DIR/data"
 
+# Analytics warehouse telemetry (fire-and-forget POST after each render).
+launchctl setenv REELABS_WAREHOUSE_URL    "https://wwqzjgtaystvvxrzzbcw.supabase.co/functions/v1/ingest-video-render"
+launchctl setenv REELABS_WAREHOUSE_SECRET "84710dbf7d449bf458046fae00e5f45174e7a55b9628d8938c5b6c54dff15e8c"
+
+# Set GCP service-account credentials for Speech-to-Text auth.
+# William's default key; override by exporting GOOGLE_APPLICATION_CREDENTIALS before running dev.sh.
+GCP_KEY="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/Desktop/Williams Hub/.secrets/gcp-spacestudios.json}"
+if [ -f "$GCP_KEY" ]; then
+    echo "GCP credentials: $GCP_KEY"
+    launchctl setenv GOOGLE_APPLICATION_CREDENTIALS "$GCP_KEY"
+else
+    echo "WARNING: GCP credentials not found at $GCP_KEY — transcription will be disabled"
+fi
+
 echo "Restarting server via launchd..."
 launchctl kickstart -k "gui/$(id -u)/com.reelabs.mcp"
 sleep 2

@@ -187,6 +187,8 @@ package enum RenderTool {
                         renderSize: result.renderSize,
                         quality: spec.quality,
                         captionExclusionZones: captionExclusionZones,
+                        lut: result.lut,
+                        lutStrength: result.lutStrength,
                         profiler: profiler
                     )
                 }
@@ -277,6 +279,27 @@ package enum RenderTool {
                 "timing": profiler.responseTiming()
             ]
             let responseData = try safeJSONData(from: response)
+
+            // Fire-and-forget telemetry to the analytics warehouse. No-ops when
+            // REELABS_WAREHOUSE_URL / REELABS_WAREHOUSE_SECRET env vars are unset.
+            WarehouseTelemetry.postRender([
+                "render_id": "\(projectSlug)/\(saved.slug)",
+                "project": projectSlug,
+                "slug": saved.slug,
+                "status": "completed",
+                "finished_at": ISO8601DateFormatter().string(from: Date()),
+                "timing": profiler.responseTiming(),
+                "output_duration_seconds": round(duration * 100) / 100,
+                "file_size_bytes": fileSize,
+                "resolution": "\(actualWidth)x\(actualHeight)",
+                "codec": codec,
+                "fps": result.fps,
+                "source_count": spec.sources.count,
+                "segment_count": spec.segments.count,
+                "captions_applied": captionsApplied,
+                "raw": response,
+            ])
+
             return .init(content: [.text(text: String(data: responseData, encoding: .utf8) ?? "{}", annotations: nil, _meta: nil)], isError: false)
         } catch let decodingError as DecodingError {
             let detail: String
@@ -382,11 +405,37 @@ func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], s
     var remapped: [TranscriptWord] = []
     var fullTextParts: [String] = []
 
+    // Helper to decide whether a segment is a cross-cut (b-roll visual
+    // overlay, not a timeline-advancing segment). Mirrors the logic in
+    // CompositionBuilder.swift.
+    func isCrossCut(_ segIdx: Int) -> Bool {
+        guard segIdx > 0 else { return false }
+        let seg = segments[segIdx]
+        if let explicit = seg.audioFromPrev { return explicit }
+        let prev = segments[segIdx - 1]
+        return (seg.volume ?? 1.0) == 0 && prev.sourceId != seg.sourceId
+    }
+
+    // Track whether we've seen at least one non-cross-cut segment so the
+    // crossfade pullback behaves identically to CompositionBuilder's
+    // `speakerSegIdx > 0` guard. Cross-cut segments don't cause a pullback
+    // because they don't advance the timeline.
+    var speakerSegCount = 0
+
     for (segIdx, seg) in segments.enumerated() {
+        // ── Cross-cut: visual overlay only, no timeline advance, no words.
+        // The speaker's own audio plays continuously underneath on the A/B
+        // track; captions come only from the speaker segments themselves,
+        // not from any source window the editor chose to skip.
+        if isCrossCut(segIdx) {
+            captionLog("[remapMultiSource] seg[\(segIdx)] CROSS-CUT source='\(seg.sourceId)' → no timeline advance, no bridge words (overlay model)")
+            continue
+        }
+
         let speed = seg.speed ?? 1.0
         let segDuration = (seg.end - seg.start) / speed
 
-        if segIdx > 0, let transition = seg.transition, transition.type == .crossfade {
+        if speakerSegCount > 0, let transition = seg.transition, transition.type == .crossfade {
             let clamped = min(transition.duration, segDuration)
             compositionTime -= clamped
         }
@@ -394,6 +443,7 @@ func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], s
         guard let words = sourceTranscripts[seg.sourceId] else {
             captionLog("[remapMultiSource] seg[\(segIdx)]: no transcript for source '\(seg.sourceId)', skipping")
             compositionTime += segDuration
+            speakerSegCount += 1
             continue
         }
 
@@ -414,11 +464,12 @@ func remapMultiSourceTranscript(sourceTranscripts: [String: [TranscriptWord]], s
             }
         }
 
-        captionLog("[remapMultiSource] seg[\(segIdx)] source='\(seg.sourceId)' \(seg.start)-\(seg.end) → comp=\(compositionTime): \(segWords.count) words")
+        captionLog("[remapMultiSource] seg[\(segIdx)] source='\(seg.sourceId)' \(seg.start)-\(seg.end) → comp=\(round(compositionTime*1000)/1000): \(segWords.count) words")
         if !segWords.isEmpty {
             fullTextParts.append(segWords.joined(separator: " "))
         }
         compositionTime += segDuration
+        speakerSegCount += 1
     }
 
     captionLog("[remapMultiSource] Total: \(remapped.count) words, compositionDuration=\(round(compositionTime * 1000) / 1000)s")

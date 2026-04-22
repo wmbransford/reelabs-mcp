@@ -3,20 +3,11 @@ import Logging
 import MCP
 import ReelabsMCPLib
 
-// MARK: - Subcommands (sign-in, sign-out, whoami)
+// MARK: - Subcommands (--help only — no more auth handshake)
 
 if CommandLine.arguments.count >= 2 {
     let sub = CommandLine.arguments[1]
     switch sub {
-    case "sign-in":
-        await runSignIn()
-        exit(0)
-    case "sign-out":
-        await runSignOut()
-        exit(0)
-    case "whoami":
-        await runWhoAmI()
-        exit(0)
     case "--help", "-h", "help":
         printUsage()
         exit(0)
@@ -66,6 +57,20 @@ try DefaultPresets.seed(store: presetStore)
 // Seed bundled kits — built-ins are always upserted, user-created kits are left alone
 try DefaultKits.seed(kitsDir: paths.kitsDir)
 
+// MARK: - GCP authenticator (service-account-backed, single instance for token caching)
+
+let authenticator: GoogleAuthenticator? = {
+    guard let credentialsPath = config.gcpCredentialsPath, !credentialsPath.isEmpty else {
+        return nil
+    }
+    do {
+        return try GoogleAuthenticator(keyPath: credentialsPath)
+    } catch {
+        Logger(label: "reelabs.startup").error("Failed to load GCP credentials: \(error.localizedDescription)")
+        return nil
+    }
+}()
+
 // MARK: - Startup Validation
 
 do {
@@ -74,11 +79,10 @@ do {
     startupLogger.info("Config: \(loadResult.configSource)")
     startupLogger.info("Data root: \(dataRoot.path)")
 
-    let tokenPresent = ((try? TokenKeychain.read()) ?? nil)?.isEmpty == false
-    if tokenPresent {
-        startupLogger.info("API token: present in keychain")
+    if authenticator != nil, let path = config.gcpCredentialsPath {
+        startupLogger.info("GCP credentials: \(path)")
     } else {
-        startupLogger.warning("API token: not set (transcription disabled — run `reelabs-mcp sign-in`)")
+        startupLogger.warning("GCP credentials: not set (transcription disabled — set GOOGLE_APPLICATION_CREDENTIALS or gcp_credentials_path in config.json)")
     }
 }
 
@@ -114,7 +118,8 @@ func configureServer(_ server: Server) async {
                 arguments: params.arguments,
                 transcriptStore: transcriptStore,
                 projectStore: projectStore,
-                config: config
+                config: config,
+                authenticator: authenticator
             )
 
         case "reelabs_transcript":
@@ -223,73 +228,10 @@ func printUsage() {
 
     Usage:
       reelabs-mcp                 Run the MCP server (default)
-      reelabs-mcp sign-in         Connect this device to your ReeLabs account
-      reelabs-mcp sign-out        Remove the stored API token
-      reelabs-mcp whoami          Show whether the device is signed in
       reelabs-mcp --port <n>      Run the MCP server on a custom port
       reelabs-mcp --help          Show this message
+
+    Transcription auth: set GOOGLE_APPLICATION_CREDENTIALS to a GCP service-account
+    key with Speech-to-Text access, or add `gcp_credentials_path` to config.json.
     """)
-}
-
-func runSignIn() async {
-    let flow = DeviceCodeFlow()
-    let start: DeviceCodeFlow.Start
-    do {
-        start = try await flow.start()
-    } catch {
-        print("Failed to start sign-in: \(error.localizedDescription)")
-        exit(1)
-    }
-
-    print("""
-
-    To connect this device, open the URL below in a browser:
-
-      \(start.verificationUriComplete)
-
-    Confirm the code: \(start.userCode)
-
-    Waiting for sign-in…
-    """)
-
-    // Best-effort: open the activation URL in the default browser.
-    let task = Process()
-    task.launchPath = "/usr/bin/open"
-    task.arguments = [start.verificationUriComplete]
-    try? task.run()
-
-    do {
-        let activated = try await flow.pollUntilActivated(start: start)
-        try TokenKeychain.write(activated.apiToken)
-        print("\n✓ Device connected. You're signed in.")
-    } catch {
-        print("\nSign-in failed: \(error.localizedDescription)")
-        exit(1)
-    }
-}
-
-func runSignOut() async {
-    do {
-        try TokenKeychain.delete()
-        print("Signed out.")
-    } catch {
-        print("Failed to sign out: \(error.localizedDescription)")
-        exit(1)
-    }
-}
-
-func runWhoAmI() async {
-    let token = (try? TokenKeychain.read()) ?? nil
-    if let token, !token.isEmpty {
-        print("Signed in. Token: \(maskedToken(token))")
-    } else {
-        print("Not signed in. Run `reelabs-mcp sign-in`.")
-    }
-}
-
-func maskedToken(_ token: String) -> String {
-    guard token.count > 8 else { return "••••" }
-    let prefix = token.prefix(5)
-    let suffix = token.suffix(3)
-    return "\(prefix)…\(suffix)"
 }

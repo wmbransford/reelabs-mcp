@@ -497,10 +497,26 @@ enum CaptionLayer {
 
     // MARK: - Helpers
 
-    private static func groupWords(_ words: [TranscriptWord], wordsPerGroup: Int) -> [[TranscriptWord]] {
+    /// Break into groups of `wordsPerGroup` words. Also force a group break
+    /// whenever the gap between two consecutive word start times exceeds
+    /// `groupBreakGapSeconds` — this prevents words from far-apart segments
+    /// (e.g. across a cross-cut b-roll window) from being merged into one
+    /// group whose visible lifetime spans the whole gap (caption "freeze"
+    /// bug).
+    private static func groupWords(
+        _ words: [TranscriptWord],
+        wordsPerGroup: Int,
+        groupBreakGapSeconds: Double = 1.0
+    ) -> [[TranscriptWord]] {
         var groups: [[TranscriptWord]] = []
         var current: [TranscriptWord] = []
         for word in words {
+            if let last = current.last,
+               word.startTime - last.endTime > groupBreakGapSeconds {
+                // Gap too large — close the current group before adding.
+                groups.append(current)
+                current = []
+            }
             current.append(word)
             if current.count >= wordsPerGroup {
                 groups.append(current)

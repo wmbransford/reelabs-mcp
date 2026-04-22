@@ -36,6 +36,8 @@ final class ExportService: Sendable {
         renderSize: CGSize,
         quality: QualityConfig? = nil,
         captionExclusionZones: [ClosedRange<Double>] = [],
+        lut: LUTData? = nil,
+        lutStrength: Double = 1.0,
         profiler: RenderProfiler? = nil
     ) async throws -> ExportResult {
         if FileManager.default.fileExists(atPath: outputURL.path) {
@@ -137,6 +139,26 @@ final class ExportService: Sendable {
             }
         } else {
             captionLog("[Audio] audioMix: nil")
+        }
+
+        // === LUT PIPELINE ===
+        // Install the compiled LUT filter globally on VideoCompositor for the
+        // duration of this render. Pattern mirrors `VideoCompositor.captionOverlay`.
+        // Using a static slot is acceptable because the render queue serializes
+        // exports.
+        if let lut {
+            let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+            VideoCompositor.lutFilter = lut.makeFilter(colorSpace: colorSpace)
+            VideoCompositor.lutStrength = lutStrength
+            captionLog("[LUT] installed: size=\(lut.size) strength=\(lutStrength)")
+            diag.append("lut: installed size=\(lut.size) strength=\(lutStrength)")
+        } else {
+            VideoCompositor.lutFilter = nil
+            VideoCompositor.lutStrength = 1.0
+        }
+        defer {
+            VideoCompositor.lutFilter = nil
+            VideoCompositor.lutStrength = 1.0
         }
 
         // === CAPTION PIPELINE ===
@@ -470,14 +492,32 @@ final class ExportService: Sendable {
     }
 
     /// Default bitrate based on resolution and codec.
+    ///
+    /// Updated 2026-04-20: bumped to match the "close-to-Resolve social cut"
+    /// quality target for Sony FX6 / 4K-HEVC sources. Rationale — the previous
+    /// 8 Mbps HEVC 4K default was visibly compressed on quick-motion talking-
+    /// head cuts (Jay's gesture hands pixelated in run #3/#4 reviews).
+    ///
+    /// Long side thresholds (orientation-agnostic):
+    /// - 4K tier kicks in when either dimension ≥ 3840 OR the short side ≥ 2160
+    ///   (catches 2160×3840 vertical native just like 3840×2160 landscape).
+    ///
+    /// | Codec | 4K      | 1080p   |
+    /// |-------|---------|---------|
+    /// | HEVC  | 50 Mbps | 18 Mbps |
+    /// | H.264 | 45 Mbps | 10 Mbps |
     private static func defaultBitrate(for size: CGSize, codec: QualityConfig.Codec) -> Int {
-        let pixels = Int(size.width * size.height)
-        switch (codec, pixels) {
-        case (.hevc, ..<(1920 * 1080)):  return 4_000_000
-        case (.hevc, _):                 return 8_000_000
-        case (.h264, ..<(1920 * 1080)):  return 6_000_000
-        case (.h264, ..<(3840 * 2160)):  return 12_000_000
-        case (.h264, _):                 return 25_000_000
+        let longSide = Int(max(size.width, size.height))
+        let shortSide = Int(min(size.width, size.height))
+        let is4K = longSide >= 3840 || shortSide >= 2160
+        let is1080p = longSide >= 1920 || shortSide >= 1080
+        switch (codec, is4K, is1080p) {
+        case (.hevc, true,  _    ): return 50_000_000
+        case (.hevc, false, true ): return 18_000_000
+        case (.hevc, false, false): return 6_000_000   // 720p and below
+        case (.h264, true,  _    ): return 45_000_000
+        case (.h264, false, true ): return 10_000_000
+        case (.h264, false, false): return 4_000_000   // 720p and below
         }
     }
 

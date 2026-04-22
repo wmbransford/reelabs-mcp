@@ -25,8 +25,9 @@ swift package resolve              # after Package.swift changes
 - **Swift 6.2**, strict concurrency mode, **macOS 26+** minimum
 - Dependencies: `MCP` (swift-sdk >=0.12.0), `Yams` (>=5.0.0), `swift-nio`, `swift-log`
 - `config.json` must be in the working directory or next to the binary. Set `data_path` to the `data/` folder location.
-- Transcription auth is **keychain-backed**: `reelabs-mcp sign-in` runs the OAuth 2.0 device-code flow, stores the API token in the macOS login keychain (`service=ai.reelabs.mcp`), and hands it to the Cloud Functions proxy at `us-central1-orbit-ai-d1f41.cloudfunctions.net/transcribe`. No service-account JSON on disk.
-- Override proxy base for dev with `REELABS_PROXY_BASE=http://localhost:5001/orbit-ai-d1f41/us-central1` (Functions emulator).
+- Transcription auth is **service-account-backed**: set `GOOGLE_APPLICATION_CREDENTIALS` to a GCP service-account JSON key with `roles/speech.client` on a project that has Speech-to-Text API enabled. The runtime mints OAuth2 access tokens from the key via `GoogleAuthenticator` (JWT → token endpoint → bearer), caches them in-memory until near expiry, and calls `us-speech.googleapis.com/v2/.../recognizers/_:recognize` directly. No proxy, no keychain, no sign-in subcommand.
+- Alternatively, set `gcp_credentials_path` in `config.json` (env var takes precedence).
+- The Firebase proxy code in `functions/` and activation pages in `web/` are **orphaned** from the distribution-auth era — kept for history, deletable in a future cleanup pass.
 
 ## Package Architecture
 
@@ -93,7 +94,8 @@ Sources/
     │   ├── CompositorInstruction.swift ← Custom AVVideoCompositionInstruction for pixel-level compositing
     │   └── VideoCompositor.swift       ← Custom AVVideoCompositing implementation
     ├── Transcription/
-    │   ├── ChirpClient.swift           ← Google Chirp v2 API with JWT auth
+    │   ├── ChirpClient.swift           ← Google Chirp v2 (Speech-to-Text) direct API client
+    │   ├── GoogleAuthenticator.swift   ← Service-account JWT → OAuth2 access token minting (RS256 via Security.framework)
     │   └── TranscriptCompactor.swift   ← Groups words into utterances by silence gaps
     └── Media/
         ├── VideoProbe.swift        ← AVFoundation video inspection

@@ -12,6 +12,7 @@ package struct RenderSpec: Codable, Sendable {
     let aspectRatio: AspectRatio?
     let resolution: Resolution?
     let fps: Double?
+    let lut: LUTSpec?
     let outputPath: String
 
     package init(
@@ -19,7 +20,7 @@ package struct RenderSpec: Codable, Sendable {
         captions: CaptionConfig?, audio: AudioConfig?,
         quality: QualityConfig?, overlays: [Overlay]?,
         aspectRatio: AspectRatio?, resolution: Resolution?,
-        fps: Double?, outputPath: String
+        fps: Double?, lut: LUTSpec? = nil, outputPath: String
     ) {
         self.sources = sources
         self.segments = segments
@@ -30,6 +31,7 @@ package struct RenderSpec: Codable, Sendable {
         self.aspectRatio = aspectRatio
         self.resolution = resolution
         self.fps = fps
+        self.lut = lut
         self.outputPath = outputPath
     }
 
@@ -40,7 +42,7 @@ package struct RenderSpec: Codable, Sendable {
             captions: captions, audio: audio,
             quality: quality, overlays: overlays,
             aspectRatio: aspectRatio, resolution: resolution,
-            fps: fps, outputPath: path
+            fps: fps, lut: lut, outputPath: path
         )
     }
 
@@ -49,6 +51,26 @@ package struct RenderSpec: Codable, Sendable {
         let path: String
         let transcriptId: String?
     }
+}
+
+// MARK: - LUT Spec
+
+/// Declarative LUT application. When present, the renderer applies the LUT
+/// to the raw source pixel buffer after `preferredTransform` but before
+/// transform/crop/opacity, and switches the compositor's working color space
+/// to linear sRGB so the cube is applied in scene-linear light.
+///
+/// Captions, graphics, text overlays, and generated color overlays do NOT
+/// receive the LUT — they're already in display-referred space.
+package struct LUTSpec: Codable, Sendable {
+    /// Absolute path to a `.cube` 3D LUT file.
+    let path: String
+
+    /// Strength of the LUT 0..1. 1.0 = full application (default).
+    /// Lower values blend the graded and ungraded images linearly.
+    let strength: Double?
+
+    package var resolvedStrength: Double { strength ?? 1.0 }
 }
 
 // MARK: - Resolution
@@ -127,6 +149,21 @@ package struct SegmentSpec: Codable, Sendable {
     let keyframes: [Keyframe]?
     let transition: Transition?
     let volume: Double?
+    /// When true, treat this segment as a pure video overlay (b-roll visual
+    /// on top of the continuous speaker track) rather than a timeline-
+    /// advancing segment. The segment contributes NOTHING to the audio
+    /// timeline and does NOT advance composition time. Adjacent non-cross-
+    /// cut segments butt together on the A/B tracks, so the speaker's voice
+    /// plays continuously end-to-end. The cross-cut's own `transition`
+    /// becomes the overlay's fade-in; the next non-cross-cut segment's
+    /// `transition` becomes its fade-out.
+    ///
+    /// When nil, the cross-cut pattern is auto-detected: if `volume == 0`
+    /// AND the previous segment has a different `sourceId`, the builder
+    /// behaves as if `audioFromPrev == true`. Set to `false` explicitly to
+    /// force sequential-segment behavior (silent segment that DOES advance
+    /// the timeline).
+    let audioFromPrev: Bool?
 }
 
 // MARK: - Keyframe
@@ -222,6 +259,29 @@ package struct Overlay: Codable, Sendable {
     let imagePath: String?  // absolute path to image file (PNG, JPEG) for image overlays
     let fadeIn: Double?     // seconds for opacity fade-in at start
     let fadeOut: Double?    // seconds for opacity fade-out at end
+    /// Animated keyframes for kinetic text / motion (slam, pop, whip, settle).
+    /// Time is relative to `start`. Interpolated linearly between consecutive
+    /// keyframes. Applied ON TOP of the static cover-fill target rect:
+    /// scale/rotation are about the overlay's center, (x, y) offsets are
+    /// fractions of render width/height added to the overlay's position,
+    /// and opacity multiplies with `opacity` + any `fadeIn`/`fadeOut`.
+    let keyframes: [OverlayKeyframe]?
+    /// Playback rate multiplier for video overlay source content. 1.0 = real-
+    /// time (default), 0.5 = half-speed (2x slow-mo), 0.25 = quarter-speed
+    /// (4x slow-mo), 2.0 = 2x fast-forward. Range 0.25 – 4.0. Only meaningful
+    /// for video overlays (`sourceId` present); ignored for image/text/color.
+    ///
+    /// Behavior: the overlay plays its source content over the SAME
+    /// composition window `[start, end]`. With `speed: 0.25` over a 4s
+    /// composition window, only 1s of source is consumed (starting at
+    /// `sourceStart`), played back 4x slower. The composition window
+    /// duration is unchanged — only how much source is consumed.
+    ///
+    /// Audio: overlay audio is scaled along with video. No pitch correction
+    /// is applied, so slowed audio drops pitch (moot for b-roll with
+    /// `audio: 0`, which is the default). Keyframe `time` remains in
+    /// composition time relative to `start` (NOT source time).
+    let speed: Double?
 
     /// Overlay kind inferred from field presence.
     package enum Kind {
@@ -237,6 +297,29 @@ package struct Overlay: Codable, Sendable {
         if text != nil { return .text }
         return .color
     }
+}
+
+// MARK: - Overlay Keyframe
+
+/// Keyframe for an animated `Overlay`. Fields mirror `Segment.keyframes` but
+/// target overlay-space transforms (center-scale, center-rotation, pixel-
+/// fraction translation, multiplicative opacity) rather than main-segment
+/// cover-fill math. Any omitted channel holds its previous keyframed value
+/// (or the overlay default — scale 1, opacity 1, x/y/rotation 0).
+package struct OverlayKeyframe: Codable, Sendable {
+    /// Seconds from the overlay's `start`. Must be >= 0.
+    let time: Double
+    /// Multiplicative scale about overlay center. 1.0 = identity, >1 scales up.
+    let scale: Double?
+    /// Multiplicative opacity. Multiplied with base `opacity` and any
+    /// `fadeIn`/`fadeOut` ramps in `appendOverlayLayers`.
+    let opacity: Double?
+    /// Horizontal offset in render-width fractions. Added to base x.
+    let x: Double?
+    /// Vertical offset in render-height fractions. Added to base y.
+    let y: Double?
+    /// Rotation in degrees about the overlay's center.
+    let rotation: Double?
 }
 
 // MARK: - Text Overlay Config

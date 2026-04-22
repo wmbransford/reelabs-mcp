@@ -1,18 +1,24 @@
 @preconcurrency import AVFoundation
 import Foundation
 
-/// Calls the ReeLabs proxy (`/transcribe`) which forwards to Chirp v2 sync
-/// Recognize. The proxy returns the raw Chirp JSON, so the response parser is
-/// unchanged from the direct-Chirp era — only auth changed.
+/// Calls Google Cloud Speech-to-Text v2 (Chirp 3 model) directly using a
+/// service-account access token minted via `GoogleAuthenticator`.
 ///
-/// Long audio is chunked into <=55s segments and transcribed in parallel.
+/// Audio longer than 55 seconds is split into overlapping chunks and transcribed
+/// in parallel, then stitched back into a single timeline.
 final class ChirpClient: Sendable {
-    let proxyURL: URL
-    let apiToken: String
+    let authenticator: GoogleAuthenticator
+    let location: String
+    let model: String
 
-    init(proxyURL: URL, apiToken: String) {
-        self.proxyURL = proxyURL
-        self.apiToken = apiToken
+    init(
+        authenticator: GoogleAuthenticator,
+        location: String = "us",
+        model: String = "chirp_3"
+    ) {
+        self.authenticator = authenticator
+        self.location = location
+        self.model = model
     }
 
     func transcribe(flacURL: URL, durationSeconds: Double, language: String = "en-US") async throws -> TranscriptData {
@@ -195,26 +201,38 @@ final class ChirpClient: Sendable {
         return TranscriptData(words: allWords, fullText: fullText, durationSeconds: durationSeconds)
     }
 
-    // MARK: - Proxy Sync Recognize
+    // MARK: - Chirp v2 sync Recognize
 
     private func transcribeSync(flacURL: URL, durationSeconds: Double, language: String) async throws -> TranscriptData {
         let audioData = try Data(contentsOf: flacURL)
+        let accessToken = try await authenticator.accessToken()
+        let projectId = await authenticator.projectId
 
-        var components = URLComponents(url: proxyURL, resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "language", value: language),
-            URLQueryItem(name: "durationSeconds", value: String(format: "%.3f", durationSeconds)),
-        ]
-        guard let url = components?.url else {
+        let endpoint = "https://\(location)-speech.googleapis.com/v2/projects/\(projectId)/locations/\(location)/recognizers/_:recognize"
+        guard let url = URL(string: endpoint) else {
             throw ChirpError.invalidEndpoint
         }
 
+        let body: [String: Any] = [
+            "config": [
+                "languageCodes": [language],
+                "model": model,
+                "features": [
+                    "enableWordTimeOffsets": true,
+                    "enableAutomaticPunctuation": true,
+                ],
+                "autoDecodingConfig": [String: Any](),
+            ],
+            "content": audioData.base64EncodedString(),
+        ]
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 120
-        request.httpBody = audioData
+        request.httpBody = bodyData
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -225,11 +243,9 @@ final class ChirpClient: Sendable {
         switch httpResponse.statusCode {
         case 200:
             return try parseSyncResponse(data: data)
-        case 401:
-            throw ChirpError.unauthenticated
-        case 402:
+        case 401, 403:
             let body = String(data: data, encoding: .utf8) ?? ""
-            throw ChirpError.quotaExceeded(body: body)
+            throw ChirpError.unauthenticated(body: body)
         default:
             let body = String(data: data, encoding: .utf8) ?? "Unknown error"
             throw ChirpError.apiError(statusCode: httpResponse.statusCode, body: body)
@@ -346,8 +362,7 @@ final class ChirpClient: Sendable {
 enum ChirpError: LocalizedError {
     case invalidEndpoint
     case invalidResponse
-    case unauthenticated
-    case quotaExceeded(body: String)
+    case unauthenticated(body: String)
     case apiError(statusCode: Int, body: String)
     case parseError(String)
 
@@ -355,8 +370,7 @@ enum ChirpError: LocalizedError {
         switch self {
         case .invalidEndpoint: "Invalid API endpoint"
         case .invalidResponse: "Invalid HTTP response"
-        case .unauthenticated: "Not signed in. Run `reelabs-mcp sign-in` to connect this device."
-        case .quotaExceeded(let body): "Quota exceeded: \(body)"
+        case .unauthenticated(let body): "Speech-to-Text auth failed. Verify the service account key and that Speech API is enabled. Response: \(body)"
         case .apiError(let code, let body): "API error \(code): \(body)"
         case .parseError(let msg): "Parse error: \(msg)"
         }

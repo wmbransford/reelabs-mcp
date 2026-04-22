@@ -339,6 +339,63 @@ struct RenderSpecDecodingTests {
         #expect(overlay.kind == .text)
     }
 
+    @Test("Overlay keyframes decode with all channels")
+    func overlayKeyframeDecoding() throws {
+        let json = """
+        {
+            "sources": [{"id": "main", "path": "/tmp/main.mp4"}],
+            "segments": [{"source_id": "main", "start": 0, "end": 10}],
+            "overlays": [{
+                "image_path": "/tmp/slam.png",
+                "start": 5.0, "end": 6.5,
+                "x": 0.1, "y": 0.4, "width": 0.8, "height": 0.2,
+                "keyframes": [
+                    {"time": 0.0, "scale": 0.6, "opacity": 0.0},
+                    {"time": 0.08, "scale": 1.18, "opacity": 1.0, "rotation": -4.0},
+                    {"time": 0.2, "scale": 1.0, "rotation": 0.0, "x": 0.01, "y": -0.005},
+                    {"time": 1.5, "scale": 1.0}
+                ]
+            }],
+            "output_path": "/tmp/o.mp4"
+        }
+        """
+        let spec = try decode(json)
+        let overlay = try #require(spec.overlays?.first)
+        let kfs = try #require(overlay.keyframes)
+
+        #expect(kfs.count == 4)
+        #expect(kfs[0].time == 0.0)
+        #expect(kfs[0].scale == 0.6)
+        #expect(kfs[0].opacity == 0.0)
+        #expect(kfs[1].rotation == -4.0)
+        #expect(kfs[2].x == 0.01)
+        #expect(kfs[2].y == -0.005)
+        // Missing channels decode as nil — forward-fill happens in
+        // CompositionBuilder.resolveOverlayKeyframes at build time.
+        #expect(kfs[3].opacity == nil)
+        #expect(kfs[3].rotation == nil)
+        #expect(overlay.kind == .image)
+    }
+
+    @Test("Overlay keyframes are optional")
+    func overlayKeyframesOptional() throws {
+        let json = """
+        {
+            "sources": [{"id": "main", "path": "/tmp/main.mp4"}],
+            "segments": [{"source_id": "main", "start": 0, "end": 10}],
+            "overlays": [{
+                "source_id": "main",
+                "start": 0, "end": 5,
+                "x": 0, "y": 0, "width": 1, "height": 1
+            }],
+            "output_path": "/tmp/o.mp4"
+        }
+        """
+        let spec = try decode(json)
+        let overlay = try #require(spec.overlays?.first)
+        #expect(overlay.keyframes == nil)
+    }
+
     @Test("Keyframes decode in segment")
     func keyframeDecoding() throws {
         let json = """

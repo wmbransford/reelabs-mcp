@@ -12,7 +12,7 @@ struct RemapTranscriptTests {
     }
 
     private func segment(_ sourceId: String = "main", start: Double, end: Double, speed: Double? = nil) -> SegmentSpec {
-        SegmentSpec(sourceId: sourceId, start: start, end: end, speed: speed, transform: nil, keyframes: nil, transition: nil, volume: nil)
+        SegmentSpec(sourceId: sourceId, start: start, end: end, speed: speed, transform: nil, keyframes: nil, transition: nil, volume: nil, audioFromPrev: nil)
     }
 
     @Test("Single segment — words pass through with zero offset")
@@ -187,7 +187,7 @@ struct RemapMultiSourceTests {
     }
 
     private func segment(_ sourceId: String, start: Double, end: Double, speed: Double? = nil) -> SegmentSpec {
-        SegmentSpec(sourceId: sourceId, start: start, end: end, speed: speed, transform: nil, keyframes: nil, transition: nil, volume: nil)
+        SegmentSpec(sourceId: sourceId, start: start, end: end, speed: speed, transform: nil, keyframes: nil, transition: nil, volume: nil, audioFromPrev: nil)
     }
 
     @Test("Two sources interleaved — words mapped to correct composition times")
@@ -262,6 +262,53 @@ struct RemapMultiSourceTests {
         #expect(result.words[0].startTime == 0.0)
         #expect(result.words[0].endTime == 0.5)  // 1.0 / 2.0
         #expect(result.durationSeconds == 1.0)     // 2.0 / 2.0
+    }
+
+    // Helper for cross-cut pattern — lets us set volume=0 to auto-infer
+    // audioFromPrev during multi-source remapping.
+    private func volZeroSegment(_ sourceId: String, start: Double, end: Double) -> SegmentSpec {
+        SegmentSpec(sourceId: sourceId, start: start, end: end, speed: nil, transform: nil, keyframes: nil, transition: nil, volume: 0, audioFromPrev: nil)
+    }
+
+    @Test("Cross-cut A→B→A — overlay model: no timeline advance, no bridge words")
+    func crossCutAsOverlay() {
+        // Main speaker source:
+        //   "inseg0" at src 6.0
+        //   "gap1".."gap3" at src 8.5..9.5 (in the speaker source window the
+        //      editor chose to SKIP — these must NOT appear in captions)
+        //   "inseg2" at src 11.2 (captioned in seg 2)
+        let main = [
+            word("inseg0", start: 6.0, end: 6.5),
+            word("gap1", start: 8.5, end: 8.8),
+            word("gap2", start: 8.9, end: 9.2),
+            word("gap3", start: 9.3, end: 9.5),
+            word("inseg2", start: 11.2, end: 11.5),
+        ]
+        let transcripts = ["main": main, "broll": [TranscriptWord]()]
+
+        // Seg 0: main 5..8 (compTime 0..3)
+        // Seg 1: broll 0..5, volume=0 (cross-cut — VISUAL OVERLAY ONLY; does
+        //   NOT advance the audio/caption timeline)
+        // Seg 2: main 10..13 (compTime 3..6 — butts directly against seg 0)
+        //   Total compositionDuration = 6s (was 11s under the sequential
+        //   cross-cut model before the overlay refactor).
+        let segments = [
+            segment("main", start: 5.0, end: 8.0),
+            volZeroSegment("broll", start: 0.0, end: 5.0),
+            segment("main", start: 10.0, end: 13.0),
+        ]
+
+        let result = remapMultiSourceTranscript(sourceTranscripts: transcripts, segments: segments)
+
+        let byWord = Dictionary(uniqueKeysWithValues: result.words.map { ($0.word, $0.startTime) })
+        #expect(byWord["inseg0"] == 1.0)        // seg 0: comp 0 + (6.0-5.0) = 1.0
+        #expect(byWord["gap1"] == nil)          // skipped — broll is visual-only, no bridge
+        #expect(byWord["gap2"] == nil)
+        #expect(byWord["gap3"] == nil)
+        #expect(byWord["inseg2"] == 4.2)        // seg 2: comp 3 + (11.2-10.0) = 4.2
+
+        // Composition duration is the sum of speaker-segment durations only.
+        #expect(result.durationSeconds == 6.0)
     }
 }
 
