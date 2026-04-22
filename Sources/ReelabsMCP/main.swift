@@ -52,7 +52,7 @@ let assetStore = AssetStore(database: database)
 let transcriptStore = TranscriptStore(database: database)
 let renderStore = RenderStore(paths: paths)
 let presetStore = PresetStore(database: database)
-let analysisStore = AnalysisStore(paths: paths)
+let analysisStore = AnalysisStore(database: database)
 
 // Seed default presets on first run
 try DefaultPresets.seed(store: presetStore)

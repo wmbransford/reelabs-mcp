@@ -12,7 +12,7 @@ package enum MarkdownImporter {
         try importPresets(database: database)
         try importAssets(database: database)
         try importTranscripts(database: database)
-        // Later tasks will extend this with analyses, renders.
+        try importAnalyses(database: database)
     }
 
     static func importProjects(database: Database) throws {
@@ -200,6 +200,94 @@ package enum MarkdownImporter {
                                     VALUES (?, ?, ?, ?, ?, ?, ?)
                                 """,
                                 arguments: [projectSlug, sourceSlug, i, w.word, w.start, w.end, w.confidence]
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    static func importAnalyses(database: Database) throws {
+        let projectsDir = database.paths.projectsDir
+        guard FileManager.default.fileExists(atPath: projectsDir.path) else { return }
+
+        let projectDirs = try FileManager.default.contentsOfDirectory(
+            at: projectsDir,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        )
+
+        for projectDir in projectDirs {
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: projectDir.path, isDirectory: &isDir)
+            guard isDir.boolValue else { continue }
+
+            let projectSlug = projectDir.lastPathComponent
+
+            let entries = (try? FileManager.default.contentsOfDirectory(at: projectDir, includingPropertiesForKeys: nil)) ?? []
+            for entry in entries where entry.lastPathComponent.hasSuffix(".analysis.md") {
+                guard let parsed = try? MarkdownStore.read(at: entry, as: AnalysisRecord.self).frontMatter else {
+                    continue
+                }
+                let sourceSlug = entry.lastPathComponent
+                    .replacingOccurrences(of: ".analysis.md", with: "")
+
+                // Load sibling `{source}.scenes.json` if present.
+                let scenesURL = projectDir.appendingPathComponent("\(sourceSlug).scenes.json")
+                let scenes: [SceneRecord]
+                if FileManager.default.fileExists(atPath: scenesURL.path),
+                   let data = try? Data(contentsOf: scenesURL),
+                   let decoded = try? JSONDecoder().decode([SceneRecord].self, from: data) {
+                    scenes = decoded
+                } else {
+                    scenes = []
+                }
+
+                try database.pool.write { conn in
+                    try conn.execute(
+                        sql: """
+                            INSERT OR IGNORE INTO analyses (
+                                project_slug, source_slug, source_path, status, sample_fps,
+                                frame_count, scene_count, duration_seconds, frames_dir, created
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        arguments: [
+                            projectSlug,
+                            sourceSlug,
+                            parsed.sourcePath,
+                            parsed.status,
+                            parsed.sampleFps,
+                            parsed.frameCount,
+                            parsed.sceneCount,
+                            parsed.durationSeconds,
+                            parsed.framesDir,
+                            parsed.created,
+                        ]
+                    )
+
+                    // Only seed scenes if the parent analysis row was actually inserted.
+                    if conn.changesCount > 0 && !scenes.isEmpty {
+                        for s in scenes {
+                            let tagsJSON: String?
+                            if let tags = s.tags {
+                                let tagsData = try JSONSerialization.data(withJSONObject: tags)
+                                tagsJSON = String(data: tagsData, encoding: .utf8)
+                            } else {
+                                tagsJSON = nil
+                            }
+                            try conn.execute(
+                                sql: """
+                                    INSERT OR IGNORE INTO scenes (
+                                        project_slug, source_slug, scene_index, start_time, end_time,
+                                        description, tags_json, scene_type
+                                    )
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                arguments: [
+                                    projectSlug, sourceSlug, s.sceneIndex, s.startTime, s.endTime,
+                                    s.description, tagsJSON, s.sceneType
+                                ]
                             )
                         }
                     }
