@@ -27,6 +27,7 @@ let package = Package(
             path: "Sources/ReelabsMCPLib",
             resources: [
                 .copy("Resources/kits"),
+                .copy("Resources/migrations"),
             ]
         ),
         .executableTarget(

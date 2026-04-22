@@ -26,6 +26,9 @@ package struct DataPaths: Sendable {
     package var framesDir: URL { mediaDir.appendingPathComponent("Frames", isDirectory: true) }
     package var graphicsDir: URL { mediaDir.appendingPathComponent("Graphics", isDirectory: true) }
 
+    package var databaseFile: URL { root.appendingPathComponent("reelabs.db") }
+    package var migrationsDir: URL { root.appendingPathComponent("migrations", isDirectory: true) }
+
     // MARK: - Project-scoped paths
 
     package func projectDir(_ slug: String) -> URL {
