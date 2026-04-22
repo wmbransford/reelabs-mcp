@@ -25,6 +25,7 @@ Subcommands:
   exec "<SQL>"        Run INSERT/UPDATE/DELETE/DDL.
   tables              List tables.
   path                Print resolved DB path.
+  verify-parity       Compare DB rows against on-disk markdown/JSON files.
 EOF
 }
 
@@ -45,6 +46,7 @@ case "$sub" in
     exec)       require_db; sqlite3 "${PRAGMAS[@]}" "$DB" "${1:?usage: db exec \"<SQL>\"}";;
     tables)     require_db; sqlite3 "${PRAGMAS[@]}" "$DB" ".tables";;
     path)       echo "$DB";;
+    verify-parity) require_db; python3 "$HERE/verify-parity.py" "$DATA_ROOT";;
     -h|--help)  usage;;
     *)          echo "unknown subcommand: $sub" >&2; usage; exit 1;;
 esac
