@@ -24,6 +24,7 @@ package final class Database: @unchecked Sendable {
         self.paths = paths
 
         try runMigrations()
+        try MarkdownImporter.runIfNeeded(database: self)
     }
 
     private func runMigrations() throws {
