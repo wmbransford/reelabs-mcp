@@ -40,10 +40,10 @@ package enum RerenderTool {
         }
 
         do {
-            guard let loaded = try renderStore.get(project: parts.project, render: parts.source) else {
+            guard let record = try renderStore.get(project: parts.project, slug: parts.source) else {
                 return .init(content: [.text(text: "Render not found: \(id)", annotations: nil, _meta: nil)], isError: true)
             }
-            guard let specJson = loaded.specJson else {
+            guard let specJson = try renderStore.getSpec(project: parts.project, slug: parts.source) else {
                 return .init(content: [.text(text: "Render \(id) has no embedded spec", annotations: nil, _meta: nil)], isError: true)
             }
 
@@ -84,7 +84,7 @@ package enum RerenderTool {
                 "project": .string(parts.project)
             ]
             // Preserve the original render's slug as the base for the new render
-            args["slug"] = .string(loaded.record.slug + "-rerender")
+            args["slug"] = .string(record.slug + "-rerender")
 
             return await RenderTool.handle(
                 arguments: args,

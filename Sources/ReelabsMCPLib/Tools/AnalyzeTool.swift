@@ -109,17 +109,15 @@ package enum AnalyzeTool {
             outputDir: framesDir
         )
 
-        var record = AnalysisRecord(
-            slug: sourceSlug,
+        try analysisStore.save(
+            project: projectSlug,
+            source: sourceSlug,
             sourcePath: path,
-            status: "extracted",
             sampleFps: sampleFps,
             frameCount: frames.count,
-            sceneCount: 0,
-            durationSeconds: durationSeconds,
-            framesDir: framesDir.path
+            framesDir: framesDir.path,
+            durationSeconds: durationSeconds
         )
-        record = try analysisStore.saveRecord(project: projectSlug, source: sourceSlug, record: record)
 
         let analysisId = "\(projectSlug)/\(sourceSlug)"
         let framesJson = frames.map { frame in
@@ -178,7 +176,7 @@ package enum AnalyzeTool {
             return .init(content: [.text(text: "Missing required argument: scenes", annotations: nil, _meta: nil)], isError: true)
         }
 
-        guard try store.getRecord(project: parts.project, source: parts.source) != nil else {
+        guard try store.get(project: parts.project, source: parts.source) != nil else {
             return .init(content: [.text(text: "Analysis not found: \(id)", annotations: nil, _meta: nil)], isError: true)
         }
 
@@ -206,7 +204,7 @@ package enum AnalyzeTool {
             ))
         }
 
-        try store.storeScenes(project: parts.project, source: parts.source, scenes: scenes)
+        try store.saveScenes(project: parts.project, source: parts.source, scenes: scenes)
 
         let response: [String: Any] = [
             "analysis_id": id,
@@ -224,7 +222,7 @@ package enum AnalyzeTool {
         guard let parts = DataPaths.splitCompoundId(id) else {
             return .init(content: [.text(text: "Invalid analysis_id. Expected 'project/source'.", annotations: nil, _meta: nil)], isError: true)
         }
-        guard let analysis = try store.getRecord(project: parts.project, source: parts.source) else {
+        guard let analysis = try store.get(project: parts.project, source: parts.source) else {
             return .init(content: [.text(text: "Analysis not found: \(id)", annotations: nil, _meta: nil)], isError: true)
         }
         let scenes = try store.getScenes(project: parts.project, source: parts.source)
