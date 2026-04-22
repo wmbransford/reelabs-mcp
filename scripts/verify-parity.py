@@ -68,37 +68,102 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any] | None, str]:
 
     fm: dict[str, Any] = {}
     current_list_key: str | None = None
-    for raw in fm_lines:
+    i = 0
+    while i < len(fm_lines):
+        raw = fm_lines[i]
         if not raw.strip():
             current_list_key = None
+            i += 1
             continue
         if raw.startswith("- "):
             if current_list_key is None:
-                # Mid-stream list without a key — bail.
                 return None, text
             item = raw[2:].strip()
             fm[current_list_key].append(_unquote(item))
+            i += 1
             continue
         if ":" not in raw:
             current_list_key = None
+            i += 1
             continue
         key, _, value = raw.partition(":")
         key = key.strip()
         value = value.strip()
+        # Multi-line quoted scalar: accumulate continuation lines until the
+        # closing quote. YAML's default block-folded form for long strings.
+        if value.startswith('"') and not _double_quoted_closes(value):
+            parts = [value]
+            i += 1
+            while i < len(fm_lines):
+                parts.append(fm_lines[i].strip())
+                if _double_quoted_closes(fm_lines[i].strip()):
+                    break
+                i += 1
+            value = " ".join(parts)
+        elif value.startswith("'") and not _single_quoted_closes(value):
+            parts = [value]
+            i += 1
+            while i < len(fm_lines):
+                parts.append(fm_lines[i].strip())
+                if _single_quoted_closes(fm_lines[i].strip()):
+                    break
+                i += 1
+            value = " ".join(parts)
         if value == "":
-            # Either a list header or an explicit-null; decide on the next line.
             fm[key] = []
             current_list_key = key
         else:
             fm[key] = _coerce(value)
             current_list_key = None
+        i += 1
     return fm, body
 
 
+def _double_quoted_closes(s: str) -> bool:
+    """True if s ends a double-quoted scalar (closing `"` not preceded by `\\`)."""
+    if not s.endswith('"'):
+        return False
+    if s == '"':
+        return False
+    backslashes = 0
+    for ch in reversed(s[:-1]):
+        if ch == "\\":
+            backslashes += 1
+        else:
+            break
+    return backslashes % 2 == 0
+
+
+def _single_quoted_closes(s: str) -> bool:
+    """True if s ends a single-quoted scalar (closing `'` not part of an escaped `''`)."""
+    if not s.endswith("'") or s == "'":
+        return False
+    # YAML escapes `'` inside single-quoted strings as `''`; the closing quote
+    # is one that isn't followed by another `'` from the right side. Counted
+    # from the end: trailing run of `'` of odd length means we're closing.
+    run = 0
+    for ch in reversed(s):
+        if ch == "'":
+            run += 1
+        else:
+            break
+    return run % 2 == 1
+
+
 def _unquote(s: str) -> Any:
-    if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
+    if s.startswith("'") and s.endswith("'"):
         return s[1:-1]
+    if s.startswith('"') and s.endswith('"'):
+        return _decode_double_quoted(s[1:-1])
     return _coerce(s)
+
+
+def _decode_double_quoted(s: str) -> str:
+    """Decode YAML double-quoted escapes (\\uXXXX, \\\", \\\\, \\n, \\t)."""
+    try:
+        return s.encode("utf-8").decode("unicode_escape")
+    except UnicodeDecodeError:
+        return s
 
 
 def _coerce(s: str) -> Any:
@@ -110,8 +175,10 @@ def _coerce(s: str) -> Any:
     if s in ("null", "~", ""):
         return None
     # Quoted string
-    if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
+    if s.startswith("'") and s.endswith("'"):
         return s[1:-1]
+    if s.startswith('"') and s.endswith('"'):
+        return _decode_double_quoted(s[1:-1])
     # Number (handles YAML 1e+01-style scientific notation)
     try:
         if "." in s or "e" in s or "E" in s:
