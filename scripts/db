@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# scripts/db — thin wrapper around sqlite3 for ReeLabs MCP
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$HERE/.." && pwd)"
+
+# Respect REELABS_DATA_DIR in dev; fall back to the Homebrew/prod location.
+if [[ -n "${REELABS_DATA_DIR:-}" ]]; then
+    DATA_ROOT="${REELABS_DATA_DIR/#\~/$HOME}"
+else
+    DATA_ROOT="$HOME/Library/Application Support/ReelabsMCP"
+fi
+DB="$DATA_ROOT/reelabs.db"
+
+PRAGMAS=(-cmd "PRAGMA foreign_keys=ON" -cmd "PRAGMA synchronous=NORMAL" -cmd ".timeout 5000")
+
+usage() {
+    cat <<EOF
+Usage: db <subcommand> [args]
+
+Subcommands:
+  query "<SQL>"       Run SELECT, aligned columns with headers.
+  query-json "<SQL>"  Run SELECT, output JSON.
+  exec "<SQL>"        Run INSERT/UPDATE/DELETE/DDL.
+  tables              List tables.
+  path                Print resolved DB path.
+EOF
+}
+
+require_db() {
+    if [[ ! -f "$DB" ]]; then
+        echo "error: reelabs.db not found at $DB" >&2
+        echo "hint: start the MCP server once so migrations run" >&2
+        exit 1
+    fi
+}
+
+sub="${1-}"
+[[ -z "$sub" ]] && { usage; exit 1; }
+shift || true
+case "$sub" in
+    query)      require_db; sqlite3 "${PRAGMAS[@]}" -header -column "$DB" "${1:?usage: db query \"<SQL>\"}";;
+    query-json) require_db; sqlite3 "${PRAGMAS[@]}" -json "$DB" "${1:?usage: db query-json \"<SQL>\"}";;
+    exec)       require_db; sqlite3 "${PRAGMAS[@]}" "$DB" "${1:?usage: db exec \"<SQL>\"}";;
+    tables)     require_db; sqlite3 "${PRAGMAS[@]}" "$DB" ".tables";;
+    path)       echo "$DB";;
+    -h|--help)  usage;;
+    *)          echo "unknown subcommand: $sub" >&2; usage; exit 1;;
+esac
