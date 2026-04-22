@@ -67,7 +67,7 @@ package enum TranscriptTool {
                 guard let parts = DataPaths.splitCompoundId(id) else {
                     return .init(content: [.text(text: "Invalid transcript_id. Expected 'project/source' format.", annotations: nil, _meta: nil)], isError: true)
                 }
-                guard let record = try store.getRecord(project: parts.project, source: parts.source) else {
+                guard let record = try store.get(project: parts.project, source: parts.source) else {
                     return .init(content: [.text(text: "Transcript not found: \(id)", annotations: nil, _meta: nil)], isError: true)
                 }
                 guard let mdFile = try store.getMarkdown(project: parts.project, source: parts.source) else {

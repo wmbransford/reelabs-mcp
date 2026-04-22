@@ -37,7 +37,7 @@ package enum SilenceRemoveTool {
         let padding = extractDouble(arguments?["padding"]) ?? 0.15
 
         do {
-            guard let record = try store.getRecord(project: parts.project, source: parts.source) else {
+            guard let record = try store.get(project: parts.project, source: parts.source) else {
                 return .init(content: [.text(text: "Transcript not found: \(id)", annotations: nil, _meta: nil)], isError: true)
             }
             let compactArray = try store.getCompactEntries(project: parts.project, source: parts.source)

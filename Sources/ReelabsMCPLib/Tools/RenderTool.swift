@@ -114,7 +114,7 @@ package enum RenderTool {
                     return .init(content: [.text(text: "Caption error: transcript '\(tid)' not found or has 0 words. Run reelabs_transcribe first.", annotations: nil, _meta: nil)], isError: true)
                 }
                 let parts = DataPaths.splitCompoundId(tid) ?? (projectSlug, tid)
-                let record = try transcriptStore.getRecord(project: parts.0, source: parts.1)
+                let record = try transcriptStore.get(project: parts.0, source: parts.1)
                 let fullText = words.map { $0.word }.joined(separator: " ")
                 transcriptData = TranscriptData(
                     words: words,
@@ -217,21 +217,21 @@ package enum RenderTool {
                 baseSlug = SlugGenerator.slugify(outputURL.deletingPathExtension().lastPathComponent)
             }
 
-            let record = RenderRecord(
-                slug: baseSlug,
-                status: "completed",
-                durationSeconds: duration,
-                outputPath: spec.outputPath,
-                fileSizeBytes: fileSize,
-                sources: spec.sources.map { $0.id }
-            )
+            let finalSlug = try SlugGenerator.uniqueSlug(base: baseSlug) { candidate in
+                // Returns true if the slug is *taken* — drives SlugGenerator to append a suffix.
+                (try? renderStore.get(project: projectSlug, slug: candidate)) != nil
+            }
 
             let saved = try renderStore.save(
                 project: projectSlug,
-                baseSlug: baseSlug,
-                record: record,
-                specJson: specJson,
-                notes: nil
+                slug: finalSlug,
+                specJSON: specJson,
+                outputPath: spec.outputPath,
+                status: "completed",
+                durationSeconds: duration,
+                fileSizeBytes: fileSize,
+                sources: spec.sources.map { $0.id },
+                notesMd: ""
             )
 
             // Build response

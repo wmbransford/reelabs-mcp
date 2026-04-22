@@ -126,17 +126,9 @@ package struct TranscriptStore: Sendable {
         }
     }
 
-    // MARK: - Backwards-compatible shims for pre-SQLite tool call sites
-    //
-    // These maintain the API the rest of the codebase was built against. They
-    // should be removed once Task E2 ships and callers migrate to the new API.
+    // MARK: - Cross-project queries + markdown views (used by Tools)
 
-    /// Legacy alias for `get`. Returns the metadata record only.
-    package func getRecord(project: String, source: String) throws -> TranscriptRecord? {
-        try get(project: project, source: source)
-    }
-
-    /// Legacy list across all projects. Returns `(project, source, record)` tuples,
+    /// List across all projects. Returns `(project, source, record)` tuples,
     /// newest first — matches the old markdown-directory-walk behavior.
     package func listAll() throws -> [(project: String, source: String, record: TranscriptRecord)] {
         try database.pool.read { conn in
@@ -152,9 +144,9 @@ package struct TranscriptStore: Sendable {
         }
     }
 
-    /// Legacy "compact utterance" view — rebuilt on the fly from the word rows so
-    /// existing tools (SilenceRemoveTool, TranscriptTool) keep working without
-    /// the `.transcript.md` body on disk.
+    /// "Compact utterance" view — rebuilt on the fly from the word rows so
+    /// SilenceRemoveTool / TranscriptTool can operate without the old
+    /// `.transcript.md` body on disk.
     package func getCompactEntries(project: String, source: String) throws -> [[String: Any]] {
         let words = try getWords(project: project, source: source)
         let transcriptWords = words.map { w in
@@ -163,8 +155,9 @@ package struct TranscriptStore: Sendable {
         return TranscriptCompactor.compact(words: transcriptWords)
     }
 
-    /// Legacy markdown accessor — synthesizes a `MarkdownFile<TranscriptRecord>`
-    /// from DB contents (front matter from the row, body from the compact view).
+    /// Markdown view — synthesizes a `MarkdownFile<TranscriptRecord>` from DB
+    /// contents (front matter from the row, body from the compact view) so
+    /// `reelabs_transcript get` can return a human-readable transcript.
     /// Returns nil if the transcript doesn't exist.
     package func getMarkdown(project: String, source: String) throws -> MarkdownFile<TranscriptRecord>? {
         guard let record = try get(project: project, source: source) else { return nil }

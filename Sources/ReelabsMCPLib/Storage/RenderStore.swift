@@ -142,52 +142,7 @@ package struct RenderStore: Sendable {
         }
     }
 
-    // MARK: - Backwards-compatible shims for pre-SQLite tool call sites
-    //
-    // These mirror the API RenderTool + RerenderTool were built against, so the
-    // Tools layer doesn't need to change in this commit.
-
-    /// Legacy save — returns `(slug, RenderRecord)`. Uses `SlugGenerator.uniqueSlug`
-    /// with a DB-presence check so existing rows are not silently overwritten when
-    /// the caller passes a base slug that collides.
-    @discardableResult
-    package func save(
-        project: String,
-        baseSlug: String,
-        record: RenderRecord,
-        specJson: String,
-        notes: String? = nil
-    ) throws -> (slug: String, record: RenderRecord) {
-        let finalSlug = try SlugGenerator.uniqueSlug(base: baseSlug) { candidate in
-            // Returns true if the slug is *taken* — drives SlugGenerator to append a suffix.
-            (try? self.get(project: project, slug: candidate)) != nil
-        }
-        let saved = try save(
-            project: project,
-            slug: finalSlug,
-            specJSON: specJson,
-            outputPath: record.outputPath,
-            status: record.status,
-            durationSeconds: record.durationSeconds,
-            fileSizeBytes: record.fileSizeBytes,
-            sources: record.sources,
-            notesMd: notes ?? ""
-        )
-        return (finalSlug, saved)
-    }
-
-    /// Legacy get — returns `(record, specJson?, body)` tuple. `body` is a synthesized
-    /// markdown string rebuilt from `spec_json` + `notes_md` so callers that still
-    /// expect a markdown body keep working.
-    package func get(project: String, render: String) throws -> (record: RenderRecord, specJson: String?, body: String)? {
-        guard let record = try get(project: project, slug: render) else { return nil }
-        let spec = try getSpec(project: project, slug: render)
-        let notes = try getNotes(project: project, slug: render) ?? ""
-        let body = Self.formatBody(record: record, specJson: spec ?? "", notes: notes.isEmpty ? nil : notes)
-        return (record, spec, body)
-    }
-
-    // MARK: - Body rendering (static helper, kept for callers that need the legacy format)
+    // MARK: - Body rendering (static helpers — used by the markdown importer)
 
     static func formatBody(record: RenderRecord, specJson: String, notes: String?) -> String {
         var lines: [String] = []

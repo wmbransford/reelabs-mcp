@@ -136,32 +136,6 @@ package struct AnalysisStore: Sendable {
         }
     }
 
-    // MARK: - Backwards-compatible shims for pre-SQLite tool call sites
-
-    /// Legacy alias for `get`.
-    package func getRecord(project: String, source: String) throws -> AnalysisRecord? {
-        try get(project: project, source: source)
-    }
-
-    /// Legacy alias for `saveScenes` (old API name).
-    package func storeScenes(project: String, source: String, scenes: [SceneRecord]) throws {
-        try saveScenes(project: project, source: source, scenes: scenes)
-    }
-
-    /// Legacy `saveRecord(record:)` — maps the old struct-passing API onto `save(...)`.
-    /// Used by AnalyzeTool's extract path.
-    @discardableResult
-    package func saveRecord(project: String, source: String, record: AnalysisRecord) throws -> AnalysisRecord {
-        try save(
-            project: project,
-            source: source,
-            sourcePath: record.sourcePath,
-            sampleFps: record.sampleFps,
-            frameCount: record.frameCount,
-            framesDir: record.framesDir,
-            durationSeconds: record.durationSeconds
-        )
-    }
 }
 
 // MARK: - GRDB row decoding

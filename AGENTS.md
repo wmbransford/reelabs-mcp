@@ -173,11 +173,11 @@ TranscribeTool.handle()
 ```
 AnalyzeTool.handle(action: "extract")
   ├── FrameExtractor: extract frames at sample_fps as 720px JPEGs
-  ├── AnalysisStore.saveRecord: writes {source}.analysis.md front matter
+  ├── AnalysisStore.save: upserts the analysis row (status='extracted')
   └── Return frame paths for vision-capable sub-agent
 
 AnalyzeTool.handle(action: "store")
-  └── AnalysisStore.storeScenes: writes {source}.scenes.json + updates status
+  └── AnalysisStore.saveScenes: inserts scenes + flips status to 'analyzed'
 ```
 
 ## Data Store

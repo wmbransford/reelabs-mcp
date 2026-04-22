@@ -168,7 +168,7 @@ package enum ValidateTool {
                 for source in spec.sources {
                     if let tid = source.transcriptId {
                         let parts = DataPaths.splitCompoundId(tid) ?? (defaultProject, tid)
-                        if try transcriptStore.getRecord(project: parts.0, source: parts.1) == nil {
+                        if try transcriptStore.get(project: parts.0, source: parts.1) == nil {
                             issues.append("Source '\(source.id)': transcript '\(tid)' not found")
                         }
                     } else if spec.captions != nil && segmentSourceIds.contains(source.id) {
@@ -177,7 +177,7 @@ package enum ValidateTool {
                 }
             } else if let captions = spec.captions, let tid = captions.transcriptId {
                 let parts = DataPaths.splitCompoundId(tid) ?? (defaultProject, tid)
-                if try transcriptStore.getRecord(project: parts.0, source: parts.1) == nil {
+                if try transcriptStore.get(project: parts.0, source: parts.1) == nil {
                     issues.append("Caption transcript not found: \(tid)")
                 }
             }
