@@ -159,7 +159,7 @@ package enum DefaultPresets {
         for (name, type, config, desc) in presets {
             let data = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
             let json = String(data: data, encoding: .utf8) ?? "{}"
-            _ = try store.save(name: name, type: type, configJson: json, description: desc)
+            _ = try store.upsert(name: name, type: type, configJson: json, description: desc)
         }
     }
 }

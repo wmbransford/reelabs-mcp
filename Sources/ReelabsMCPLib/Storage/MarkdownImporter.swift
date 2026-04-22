@@ -7,7 +7,8 @@ import GRDB
 package enum MarkdownImporter {
     package static func runIfNeeded(database: Database) throws {
         try importProjects(database: database)
-        // Later tasks will extend this with presets, assets, transcripts, analyses, renders.
+        try importPresets(database: database)
+        // Later tasks will extend this with assets, transcripts, analyses, renders.
     }
 
     static func importProjects(database: Database) throws {
@@ -52,6 +53,40 @@ package enum MarkdownImporter {
                         parsed.status,
                         parsed.description,
                         tagsJSON,
+                        parsed.created,
+                        parsed.updated,
+                    ]
+                )
+            }
+        }
+    }
+
+    static func importPresets(database: Database) throws {
+        let dir = database.paths.presetsDir
+        guard FileManager.default.fileExists(atPath: dir.path) else { return }
+
+        let files = try FileManager.default.contentsOfDirectory(
+            at: dir,
+            includingPropertiesForKeys: nil
+        )
+        .filter { $0.pathExtension == "md" }
+
+        for file in files {
+            // Skip malformed legacy data rather than crashing.
+            guard let parsed = try? MarkdownStore.read(at: file, as: PresetRecord.self).frontMatter else {
+                continue
+            }
+            try database.pool.write { conn in
+                try conn.execute(
+                    sql: """
+                        INSERT OR IGNORE INTO presets (name, type, description, config_json, created, updated)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    arguments: [
+                        parsed.name,
+                        parsed.type,
+                        parsed.description,
+                        parsed.configJson,
                         parsed.created,
                         parsed.updated,
                     ]

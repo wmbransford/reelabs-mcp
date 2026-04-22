@@ -51,7 +51,7 @@ let projectStore = ProjectStore(database: database)
 let assetStore = AssetStore(paths: paths)
 let transcriptStore = TranscriptStore(paths: paths)
 let renderStore = RenderStore(paths: paths)
-let presetStore = PresetStore(paths: paths)
+let presetStore = PresetStore(database: database)
 let analysisStore = AnalysisStore(paths: paths)
 
 // Seed default presets on first run

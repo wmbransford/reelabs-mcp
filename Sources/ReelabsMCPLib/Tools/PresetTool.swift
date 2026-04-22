@@ -51,7 +51,7 @@ package enum PresetTool {
                 let configData = try JSONSerialization.data(withJSONObject: config.toJSONObject(), options: [.sortedKeys])
                 let configJson = String(data: configData, encoding: .utf8) ?? "{}"
                 let desc = arguments?["description"]?.stringValue
-                let preset = try store.save(name: name, type: type, configJson: configJson, description: desc)
+                let preset = try store.upsert(name: name, type: type, configJson: configJson, description: desc)
                 return .init(content: [.text(text: encode(preset), annotations: nil, _meta: nil)], isError: false)
 
             case "get":
