@@ -305,7 +305,7 @@ struct RemapMultiSourceTests {
         #expect(byWord["gap1"] == nil)          // skipped — broll is visual-only, no bridge
         #expect(byWord["gap2"] == nil)
         #expect(byWord["gap3"] == nil)
-        #expect(byWord["inseg2"] == 4.2)        // seg 2: comp 3 + (11.2-10.0) = 4.2
+        #expect(abs((byWord["inseg2"] ?? 0) - 4.2) < 1e-9)   // seg 2: comp 3 + (11.2-10.0) = 4.2 (float)
 
         // Composition duration is the sum of speaker-segment durations only.
         #expect(result.durationSeconds == 6.0)

@@ -14,6 +14,7 @@ data/projects/
 data/presets/
 data/kits/
 data/Media/
+data/*.pre-sqlite.bak/
 
 # Firebase Functions
 functions/node_modules/
