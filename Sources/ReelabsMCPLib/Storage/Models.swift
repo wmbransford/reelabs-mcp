@@ -352,3 +352,79 @@ package struct TranscriptWord: Codable, Sendable {
         self.confidence = confidence
     }
 }
+
+// MARK: - LibraryAsset (video spine universal source registry)
+
+package enum LibraryAssetKind: String, Codable, Sendable, CaseIterable {
+    case capturedVideo = "captured_video"
+    case capturedAudio = "captured_audio"
+    case ttsAudio = "tts_audio"
+    case aiVideo = "ai_video"
+    case aiImage = "ai_image"
+    case graphicSpec = "graphic_spec"
+    case stockVideo = "stock_video"
+    case stockImage = "stock_image"
+    case music
+    case screenRecording = "screen_recording"
+
+    /// Kinds accepted by the Plan 1 ingest tool. Other kinds require their
+    /// own generation/fetch primitives (Breadth phase) before ingest is meaningful.
+    package var supportedInPlanOne: Bool {
+        switch self {
+        case .capturedVideo, .capturedAudio: return true
+        default: return false
+        }
+    }
+}
+
+package struct LibraryAssetRecord: Codable, Sendable {
+    package var id: Int64
+    package var kind: LibraryAssetKind
+    package var path: String?
+    package var externalRef: String?
+    package var contentHash: String?
+    package var durationS: Double?
+    package var width: Int?
+    package var height: Int?
+    package var fps: Double?
+    package var codec: String?
+    package var hasAudio: Bool?
+    package var provenance: [String: String]?
+    package var sourceMetadata: [String: String]?
+    package var createdAt: String
+    package var ingestedAt: String
+
+    package init(
+        id: Int64,
+        kind: LibraryAssetKind,
+        path: String? = nil,
+        externalRef: String? = nil,
+        contentHash: String? = nil,
+        durationS: Double? = nil,
+        width: Int? = nil,
+        height: Int? = nil,
+        fps: Double? = nil,
+        codec: String? = nil,
+        hasAudio: Bool? = nil,
+        provenance: [String: String]? = nil,
+        sourceMetadata: [String: String]? = nil,
+        createdAt: String,
+        ingestedAt: String
+    ) {
+        self.id = id
+        self.kind = kind
+        self.path = path
+        self.externalRef = externalRef
+        self.contentHash = contentHash
+        self.durationS = durationS
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.codec = codec
+        self.hasAudio = hasAudio
+        self.provenance = provenance
+        self.sourceMetadata = sourceMetadata
+        self.createdAt = createdAt
+        self.ingestedAt = ingestedAt
+    }
+}
