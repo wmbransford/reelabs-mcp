@@ -66,16 +66,87 @@ package enum IngestTool {
         return await performRegister(kind: kind, url: url, arguments: arguments, store: store)
     }
 
-    // Register stage is implemented in Task 12 (below).
-    // This stub returns an error so tests of the scaffolding still pass
-    // until the full implementation lands.
     static func performRegister(
         kind: LibraryAssetKind,
         url: URL,
         arguments: [String: Value]?,
         store: LibraryAssetStore
     ) async -> CallTool.Result {
-        errorResult("register stage not yet implemented — awaiting Task 12")
+        do {
+            let contentHash = try ContentHasher.sha256(fileAt: url)
+
+            // Dedup: if we've already registered this hash, return the existing record.
+            if let existing = try store.getByContentHash(contentHash) {
+                return successResult([
+                    "library_asset_id": existing.id,
+                    "kind": existing.kind.rawValue,
+                    "path": existing.path ?? NSNull(),
+                    "content_hash": contentHash,
+                    "duration_s": existing.durationS ?? NSNull(),
+                    "already_registered": true,
+                    "message": "Content hash already registered; returning existing record."
+                ])
+            }
+
+            // Probe for captured video/audio — VideoProbe handles both.
+            let probe = try await VideoProbe.probe(path: url.path)
+
+            let provenance = extractProvenance(arguments)
+            let sourceMetadata: [String: String] = [
+                "filename": probe.filename,
+                "file_size_bytes": String(probe.fileSizeBytes)
+            ]
+
+            let record = try store.register(
+                kind: kind,
+                path: url.path,
+                contentHash: contentHash,
+                durationS: probe.duration,
+                width: probe.width,
+                height: probe.height,
+                fps: probe.fps,
+                codec: probe.codec,
+                hasAudio: probe.hasAudio,
+                provenance: provenance,
+                sourceMetadata: sourceMetadata
+            )
+
+            return successResult([
+                "library_asset_id": record.id,
+                "kind": record.kind.rawValue,
+                "path": record.path ?? NSNull(),
+                "content_hash": contentHash,
+                "duration_s": record.durationS ?? NSNull(),
+                "width": record.width ?? NSNull(),
+                "height": record.height ?? NSNull(),
+                "fps": record.fps ?? NSNull(),
+                "codec": record.codec ?? NSNull(),
+                "has_audio": record.hasAudio ?? NSNull(),
+                "already_registered": false
+            ])
+        } catch {
+            return errorResult("Ingest failed: \(error.localizedDescription)")
+        }
+    }
+
+    private static func extractProvenance(_ arguments: [String: Value]?) -> [String: String]? {
+        guard let prov = arguments?["provenance"] else { return nil }
+        guard case .object(let dict) = prov else { return nil }
+        var out: [String: String] = [:]
+        for (key, value) in dict {
+            if let s = value.stringValue { out[key] = s }
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    private static func successResult(_ payload: [String: Any]) -> CallTool.Result {
+        do {
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+            let text = String(data: data, encoding: .utf8) ?? "{}"
+            return .init(content: [.text(text: text, annotations: nil, _meta: nil)], isError: false)
+        } catch {
+            return errorResult("JSON serialization failed: \(error.localizedDescription)")
+        }
     }
 
     static func errorResult(_ message: String) -> CallTool.Result {

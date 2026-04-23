@@ -42,7 +42,8 @@ let package = Package(
         .testTarget(
             name: "ReelabsMCPTests",
             dependencies: ["ReelabsMCPLib"],
-            path: "Tests/ReelabsMCPTests"
+            path: "Tests/ReelabsMCPTests",
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

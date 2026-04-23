@@ -80,6 +80,68 @@ struct IngestToolTests {
         #expect(text.contains("not found") || text.contains("No such file"))
     }
 
+    @Test("registers a real file and returns json with id + content_hash")
+    func registersRealFile() async throws {
+        let (store, tmp) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // Copy a test-fixture video into the tmp dir so VideoProbe + ContentHasher have a real file.
+        guard let fixtureURL = Bundle.module.url(forResource: "tiny", withExtension: "mov", subdirectory: "Fixtures") else {
+            Issue.record("Missing test fixture: tiny.mov — ensure Tests/ReelabsMCPTests/Fixtures/tiny.mov is bundled")
+            return
+        }
+        let dest = tmp.appendingPathComponent("tiny.mov")
+        try FileManager.default.copyItem(at: fixtureURL, to: dest)
+
+        let result = await IngestTool.handle(
+            arguments: [
+                "path": .string(dest.path),
+                "kind": .string("captured_video")
+            ],
+            store: store
+        )
+        #expect(result.isError == false)
+        let text = extractText(result)
+        #expect(text.contains("library_asset_id"))
+        #expect(text.contains("content_hash"))
+
+        let rows = try store.listByKind(.capturedVideo)
+        #expect(rows.count == 1)
+        #expect(rows[0].path == dest.path)
+        #expect((rows[0].contentHash?.count ?? 0) == 64)
+        #expect(rows[0].durationS != nil)
+    }
+
+    @Test("re-ingesting same file returns existing record without duplicating")
+    func dedupSameFile() async throws {
+        let (store, tmp) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        guard let fixtureURL = Bundle.module.url(forResource: "tiny", withExtension: "mov", subdirectory: "Fixtures") else {
+            Issue.record("Missing test fixture: tiny.mov")
+            return
+        }
+        let dest = tmp.appendingPathComponent("tiny.mov")
+        try FileManager.default.copyItem(at: fixtureURL, to: dest)
+
+        let first = await IngestTool.handle(
+            arguments: ["path": .string(dest.path), "kind": .string("captured_video")],
+            store: store
+        )
+        let second = await IngestTool.handle(
+            arguments: ["path": .string(dest.path), "kind": .string("captured_video")],
+            store: store
+        )
+        #expect(first.isError == false)
+        #expect(second.isError == false)
+
+        let rows = try store.listByKind(.capturedVideo)
+        #expect(rows.count == 1)
+
+        let secondText = extractText(second)
+        #expect(secondText.contains("already_registered"))
+    }
+
     private func extractText(_ result: CallTool.Result) -> String {
         for item in result.content {
             if case .text(let text, _, _) = item { return text }
