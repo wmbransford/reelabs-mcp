@@ -53,6 +53,7 @@ let transcriptStore = TranscriptStore(database: database)
 let renderStore = RenderStore(database: database)
 let presetStore = PresetStore(database: database)
 let analysisStore = AnalysisStore(database: database)
+let libraryAssetStore = LibraryAssetStore(database: database)
 
 // Seed default presets on first run
 try DefaultPresets.seed(store: presetStore)
@@ -108,6 +109,7 @@ func configureServer(_ server: Server) async {
             GraphicTool.tool,
             LayoutTool.tool,
             ExtractAudioTool.tool,
+            IngestTool.tool,
         ])
     }
 
@@ -181,6 +183,12 @@ func configureServer(_ server: Server) async {
 
         case "reelabs_extract_audio":
             return await ExtractAudioTool.handle(arguments: params.arguments)
+
+        case "reelabs_ingest":
+            return await IngestTool.handle(
+                arguments: params.arguments,
+                store: libraryAssetStore
+            )
 
         default:
             return .init(
